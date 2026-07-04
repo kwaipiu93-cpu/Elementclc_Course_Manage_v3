@@ -12,6 +12,16 @@ pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<Student>> {
     Ok(students)
 }
 
+pub async fn list_by_dse_year(pool: &SqlitePool, dse_year: i32) -> AppResult<Vec<Student>> {
+    let students = sqlx::query_as::<_, Student>(
+        "SELECT * FROM students WHERE is_deleted = 0 AND dse_year = ? ORDER BY surname COLLATE NOCASE, given_name COLLATE NOCASE"
+    )
+    .bind(dse_year)
+    .fetch_all(pool)
+    .await?;
+    Ok(students)
+}
+
 pub async fn get_by_id(pool: &SqlitePool, id: i64) -> AppResult<Student> {
     sqlx::query_as::<_, Student>("SELECT * FROM students WHERE id = ? AND is_deleted = 0")
         .bind(id)

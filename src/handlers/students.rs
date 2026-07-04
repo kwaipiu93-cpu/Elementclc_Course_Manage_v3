@@ -1,5 +1,6 @@
-use axum::{extract::{Multipart, Path, State}, http::HeaderMap, Json};
+use axum::{extract::{Multipart, Path, Query, State}, http::HeaderMap, Json};
 use chrono::NaiveDate;
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::auth;
@@ -8,12 +9,21 @@ use crate::models::*;
 use crate::services::student_service;
 use crate::AppState;
 
+#[derive(Deserialize)]
+pub struct StudentListQuery {
+    pub dse_year: Option<i32>,
+}
+
 pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<StudentListQuery>,
 ) -> AppResultJson {
     let _uid = auth::get_current_user_id(&headers)?;
-    let students = student_service::list_all(&state.db).await?;
+    let students = match query.dse_year {
+        Some(year) => student_service::list_by_dse_year(&state.db, year).await?,
+        None => student_service::list_all(&state.db).await?,
+    };
     Ok(Json(json!({"ok": true, "data": students})))
 }
 

@@ -35,6 +35,7 @@ export default function Students() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<StudentForm>(emptyForm);
   const [search, setSearch] = useState('');
+  const [dseFilter, setDseFilter] = useState<string>('');
   const [highlightId, setHighlightId] = useState<number | null>(null);
 
   // ─── Multi-select state ──────────────────────────────────
@@ -150,6 +151,7 @@ export default function Students() {
 
   const fullName = (s: any) => `${s.surname} ${s.given_name}`;
   const filteredStudents = (students || []).filter((s: any) => {
+    if (dseFilter && String(s.dse_year) !== dseFilter) return false;
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
     return fullName(s).toLowerCase().includes(q)
@@ -271,9 +273,9 @@ export default function Students() {
         </button>
       </div>
 
-      {/* Search bar */}
-      <div className="mb-4">
-        <div className="relative max-w-md">
+      {/* Search bar + DSE filter */}
+      <div className="mb-4 flex items-center gap-3 flex-wrap">
+        <div className="relative max-w-md flex-1 min-w-[200px]">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-lg">🔍</span>
           <input
             type="text"
@@ -284,6 +286,30 @@ export default function Students() {
           />
           {filteredStudents.length > 0 && search && (
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">{filteredStudents.length} 項</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <GraduationCap size={16} className="text-gray-400" />
+          <select
+            value={dseFilter}
+            onChange={e => { setDseFilter(e.target.value); setSelectedIds(new Set()); }}
+            className="px-3 py-2.5 border border-gray-300 rounded-xl text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[120px]"
+          >
+            <option value="">全部 DSE 年份</option>
+            {(() => {
+              const years = new Set((students || []).map((s: any) => s.dse_year).filter(Boolean));
+              return [...years].sort().map(y => (
+                <option key={y} value={y}>{y} DSE</option>
+              ));
+            })()}
+          </select>
+          {dseFilter && (
+            <button
+              onClick={() => setDseFilter('')}
+              className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1"
+            >
+              清除
+            </button>
           )}
         </div>
       </div>
