@@ -1,0 +1,1079 @@
+pub mod config;
+pub mod db;
+pub mod error;
+pub mod auth;
+pub mod models;
+pub mod handlers;
+pub mod services;
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use axum::{
+    extract::State,
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Router,
+    body::Body,
+};
+use sqlx::Row;
+use tera::Tera;
+use tower_http::services::ServeDir;
+
+#[tokio::main]
+async fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
+    tracing_subscriber::fmt::init();
+
+    let cfg = config::Config::from_env()?;
+    let db = db::init_pool(&cfg.database_url).await?;
+    db::run_migrations(&db).await?;
+
+    let tera = match Tera::new("templates/**/*.html") {
+        Ok(t) => Some(Arc::new(t)),
+        Err(_) => {
+            tracing::warn!("No templates directory found — running in SPA-only mode");
+            None
+        }
+    };
+    let app_state = AppState { db, cfg: cfg.clone(), tera };
+
+    let app = Router::new()
+        .nest("/api", api_routes())
+        .nest_service("/assets", ServeDir::new("frontend/dist/assets"))
+        .nest_service("/static", ServeDir::new("static"))
+        // Root-level Vite output files (favicon etc.)
+        .route_service("/favicon.svg", ServeDir::new("frontend/dist/favicon.svg"))
+        // SPA: all remaining routes serve the React app
+        .fallback(get(spa_fallback))
+        .with_state(app_state);
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
+    tracing::info!("Listening on {addr}");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+// ─── Tera rendering helpers ────────────────────────────────────────────────
+
+fn render(tera: &Option<Arc<Tera>>, name: &str, ctx: &tera::Context) -> Html<String> {
+    match tera {
+        Some(t) => Html(t.render(name, ctx).unwrap_or_else(|e| {
+            format!("<h1>Template error</h1><pre>{e}</pre>")
+        })),
+        None => Html("<h1>Template not available</h1><p>Frontend not built yet. Run: cd frontend && npm run build</p>".to_string()),
+    }
+}
+
+fn page_context(current_path: &str) -> tera::Context {
+    let mut ctx = tera::Context::new();
+    ctx.insert("current_path", current_path);
+    ctx
+}
+
+// ─── SPA fallback ──────────────────────────────────────────────────────────
+
+async fn spa_fallback() -> impl IntoResponse {
+    match tokio::fs::read_to_string("frontend/dist/index.html").await {
+        Ok(html) => Response::builder()
+            .header("content-type", "text/html; charset=utf-8")
+            .body(Body::from(html))
+            .unwrap(),
+        Err(_) => (
+            axum::http::StatusCode::NOT_FOUND,
+            "Frontend not built. Run: cd frontend && npm run build",
+        )
+            .into_response(),
+    }
+}
+
+// ─── Page handlers ─────────────────────────────────────────────────────────
+
+async fn page_dashboard(State(s): State<AppState>) -> Html<String> {
+    let mut ctx = page_context("/");
+    let student_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM students WHERE is_deleted = 0")
+        .fetch_one(&s.db).await.unwrap_or(0);
+    let class_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM classes WHERE is_deleted = 0 AND is_completed = 0")
+        .fetch_one(&s.db).await.unwrap_or(0);
+    let course_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM year_courses WHERE is_deleted = 0")
+        .fetch_one(&s.db).await.unwrap_or(0);
+    let lesson_today: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM lessons WHERE date = date('now','localtime') AND is_deleted = 0"
+    )
+    .fetch_one(&s.db).await.unwrap_or(0);
+    let makeup_pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM makeup_lessons WHERE is_deleted = 0 AND status != 'done'"
+    )
+    .fetch_one(&s.db).await.unwrap_or(0);
+    ctx.insert("student_count", &student_count);
+    // Also count absent/leave attendance without a makeup
+    let unarranged: i64 = sqlx::query_scalar(
+        r#"SELECT COUNT(*)
+           FROM attendances a
+           JOIN enrollments e ON a.enrollment_id = e.id AND e.is_deleted = 0
+           WHERE a.status IN ('absent','leave')
+           AND NOT EXISTS (
+             SELECT 1 FROM makeup_lessons mk
+             WHERE mk.student_id = e.student_id
+             AND mk.lesson_num = CAST(a.lesson_num AS TEXT)
+             AND mk.is_deleted = 0
+           )"#
+    )
+    .fetch_one(&s.db).await.unwrap_or(0);
+    let makeup_pending_total = makeup_pending + unarranged;
+    ctx.insert("makeup_pending", &makeup_pending_total);
+    ctx.insert("class_count", &class_count);
+    ctx.insert("course_count", &course_count);
+    ctx.insert("lesson_today", &lesson_today);
+    ctx.insert("makeup_pending", &makeup_pending);
+    render(&s.tera, "dashboard.html", &ctx)
+}
+
+async fn page_students(State(s): State<AppState>) -> Html<String> {
+    use std::collections::HashMap;
+    let mut ctx = page_context("/students");
+    let students = sqlx::query_as::<_, crate::models::Student>(
+        "SELECT * FROM students WHERE is_deleted = 0 ORDER BY id"
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+
+    // Compute grade from dse_year
+    let current_year = 2026;
+    let mut grades: HashMap<i64, String> = HashMap::new();
+    for st in &students {
+        let grade = st.dse_year.map(|y| {
+            let g = 6 - (y - current_year);
+            if g >= 1 && g <= 6 {
+                format!("F{}", g)
+            } else {
+                format!("其他")
+            }
+        }).unwrap_or_default();
+        grades.insert(st.id, grade);
+    }
+    ctx.insert("students", &students);
+    ctx.insert("grades", &grades);
+    render(&s.tera, "students.html", &ctx)
+}
+
+async fn page_classes(State(s): State<AppState>) -> Html<String> {
+    let mut ctx = page_context("/classes");
+    let year_courses = sqlx::query_as::<_, crate::models::YearCourse>(
+        "SELECT * FROM year_courses WHERE is_deleted = 0 ORDER BY year DESC"
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    let topics = sqlx::query_as::<_, crate::models::Topic>(
+        "SELECT * FROM topics WHERE is_deleted = 0 ORDER BY sort"
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    let classes = sqlx::query_as::<_, crate::models::Class>(
+        "SELECT * FROM classes WHERE is_deleted = 0 ORDER BY id"
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    ctx.insert("year_courses", &year_courses);
+    ctx.insert("topics", &topics);
+    ctx.insert("classes", &classes);
+    render(&s.tera, "classes.html", &ctx)
+}
+
+async fn page_class_detail(
+    State(s): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Html<String> {
+    use std::collections::HashMap;
+    let mut ctx = page_context(&format!("/class/{id}"));
+    let cls = sqlx::query_as::<_, crate::models::Class>(
+        "SELECT * FROM classes WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(&s.db)
+    .await
+    .unwrap_or_default();
+    ctx.insert("class", &cls);
+
+    // Look up topic name for this class
+    let topic_name: String = match cls.as_ref() {
+        Some(c) => {
+            sqlx::query_scalar::<_, String>("SELECT name FROM topics WHERE id = ?")
+                .bind(c.topic_id)
+                .fetch_optional(&s.db)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        }
+        None => String::new(),
+    };
+    ctx.insert("topic_name", &topic_name);
+
+    // Available classes with same topic (for makeup recommendations)
+    let available_classes: Vec<serde_json::Value> = match cls.as_ref() {
+        Some(c) => {
+            sqlx::query(
+                r#"SELECT c.id, c.name, c.week, c.start, c.end, c.seat,
+                          COUNT(e.id) as enrolled
+                   FROM classes c
+                   LEFT JOIN enrollments e ON c.id = e.class_id AND e.is_deleted = 0
+                   WHERE c.topic_id = ? AND c.id != ? AND c.is_deleted = 0 AND c.is_completed = 0
+                   GROUP BY c.id
+                   ORDER BY c.id"#
+            )
+            .bind(c.topic_id)
+            .bind(c.id)
+            .fetch_all(&s.db)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row: sqlx::sqlite::SqliteRow| {
+                let id: i64 = row.get(0);
+                let name: Option<String> = row.get(1);
+                let week: Option<String> = row.get(2);
+                let start: Option<String> = row.get(3);
+                let end: Option<String> = row.get(4);
+                let seat: i32 = row.get(5);
+                let enrolled: i32 = row.get(6);
+                let available = seat - enrolled;
+                serde_json::json!({
+                    "id": id,
+                    "name": name.unwrap_or_default(),
+                    "week": week.unwrap_or_default(),
+                    "time": format!("{}-{}", start.unwrap_or_default(), end.unwrap_or_default()),
+                    "available": available,
+                    "full": available <= 0,
+                    "seat": if available > 0 { format!("剩{}位", available) } else { "滿".to_string() },
+                })
+            })
+            .collect()
+        }
+        None => vec![],
+    };
+    ctx.insert("available_classes", &available_classes);
+
+    let lessons = sqlx::query_as::<_, crate::models::Lesson>(
+        "SELECT * FROM lessons WHERE class_id = ? AND is_deleted = 0 ORDER BY num"
+    )
+    .bind(id)
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    ctx.insert("lessons", &lessons);
+
+    let enrollments = sqlx::query_as::<_, crate::models::Enrollment>(
+        "SELECT * FROM enrollments WHERE class_id = ? AND is_deleted = 0 ORDER BY id"
+    )
+    .bind(id)
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    ctx.insert("enrollments", &enrollments);
+
+    // Student name + school lookup
+    let all_students = sqlx::query_as::<_, crate::models::Student>(
+        "SELECT * FROM students WHERE is_deleted = 0"
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    let mut student_names: HashMap<i64, String> = HashMap::new();
+    let mut student_schools: HashMap<i64, String> = HashMap::new();
+    for st in &all_students {
+        student_names.insert(st.id, format!("{}{}", st.surname, st.given_name));
+        student_schools.insert(st.id, st.school.clone().unwrap_or_default());
+    }
+    ctx.insert("student_names", &student_names);
+    ctx.insert("student_schools", &student_schools);
+
+    // Attendance map: key = "{student_id}_{lesson_id}" -> (status, checkin_time)
+    let lesson_ids: Vec<i64> = lessons.iter().map(|l| l.id).collect();
+    let student_ids: Vec<i64> = enrollments.iter().map(|e| e.student_id).collect();
+    let mut checkin_map: HashMap<String, String> = HashMap::new();
+    let mut checkin_time_map: HashMap<String, String> = HashMap::new();
+
+    if !lesson_ids.is_empty() && !student_ids.is_empty() {
+        let lessons_ph: Vec<String> = lesson_ids.iter().map(|_| "?".to_string()).collect();
+        let students_ph: Vec<String> = student_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT lesson_id, student_id, status, checkin_time \
+             FROM lesson_checkins \
+             WHERE lesson_id IN ({}) AND student_id IN ({})",
+            lessons_ph.join(","), students_ph.join(",")
+        );
+        let mut q = sqlx::query_as::<_, (i64, i64, String, Option<String>)>(&sql);
+        for lid in &lesson_ids { q = q.bind(lid); }
+        for sid in &student_ids { q = q.bind(sid); }
+        let checkin_rows = q.fetch_all(&s.db).await.unwrap_or_default();
+        for (lid, sid, st, ctime) in &checkin_rows {
+            checkin_map.insert(format!("{}_{}", sid, lid), st.clone());
+            checkin_time_map.insert(format!("{}_{}", sid, lid), ctime.clone().unwrap_or_default());
+        }
+    }
+    ctx.insert("checkin_map", &checkin_map);
+    ctx.insert("checkin_time_map", &checkin_time_map);
+
+    // Lesson prerequisite check: must complete lesson N-1 before lesson N
+    let mut blocked_map: HashMap<String, bool> = HashMap::new();
+    // Build lesson_num → lesson_id lookup
+    let mut lesson_by_num: HashMap<i32, i64> = HashMap::new();
+    for l in &lessons {
+        lesson_by_num.insert(l.num, l.id);
+    }
+    for e in &enrollments {
+        for l in &lessons {
+            if l.num <= 1 { continue; }
+            let prev_lid = match lesson_by_num.get(&(l.num - 1)) {
+                Some(id) => *id,
+                None => continue,
+            };
+            let prev_key = format!("{}_{}", e.student_id, prev_lid);
+            let prev_st = checkin_map.get(&prev_key).cloned().unwrap_or_default();
+            let blocked = prev_st != "present" && prev_st != "late";
+            blocked_map.insert(format!("{}_{}", e.student_id, l.id), blocked);
+        }
+    }
+    ctx.insert("blocked_map", &blocked_map);
+
+    // Makeup status map: key = "{student_id}_{lesson_num}" -> status
+    let makeup_rows: Vec<(i64, String, String)> = sqlx::query_as::<_, (i64, String, String)>(
+        r#"SELECT m.student_id, COALESCE(m.lesson_num,''), m.status
+           FROM makeup_lessons m
+           WHERE m.original_class_id = ? AND m.is_deleted = 0"#
+    )
+    .bind(id)
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    let mut makeup_map: HashMap<String, String> = HashMap::new();
+    for (sid, lnum, st) in &makeup_rows {
+        makeup_map.insert(format!("{}_{}", sid, lnum), st.clone());
+    }
+    ctx.insert("makeup_map", &makeup_map);
+
+    // Keep enroll_ids for attendance log query
+    let enroll_ids: Vec<i64> = enrollments.iter().map(|e| e.id).collect();
+
+    // ── Report timeline: all checkin + makeup events, latest first ──
+    #[derive(serde::Serialize)]
+    struct ReportEvent {
+        date: String,
+        sort_key: String,
+        student_name: String,
+        event_type: String,
+        lesson_label: String,
+        class_name: String,
+        lesson_date: String,
+        checkin_time: String,
+        makeup_type: String,
+        makeup_class: String,
+        original_topic: String,
+        mk_status: String,
+        change_note: String,
+    }
+
+    let mut report_events: Vec<ReportEvent> = Vec::new();
+    let cls_name = cls.as_ref().map(|c| c.name.clone().unwrap_or_default()).unwrap_or_default();
+
+    // Checkin events from lesson_checkins
+    for l in &lessons {
+        for e in &enrollments {
+            let ck_key = format!("{}_{}", e.student_id, l.id);
+            let st = checkin_map.get(&ck_key).cloned().unwrap_or_default();
+            if st.is_empty() { continue; }
+            let ctime = checkin_time_map.get(&ck_key).cloned().unwrap_or_default();
+            let sname = student_names.get(&e.student_id).cloned().unwrap_or_default();
+            let lesson_date = l.date.map(|d| d.to_string()).unwrap_or_default();
+            let sort_key = format!("{}_att_{}_{}", lesson_date, l.num, e.student_id);
+            report_events.push(ReportEvent {
+                sort_key,
+                date: lesson_date.clone(),
+                student_name: sname,
+                event_type: st.clone(),
+                lesson_label: format!("第{}課", l.num),
+                class_name: cls_name.clone(),
+                lesson_date,
+                checkin_time: ctime,
+                makeup_type: String::new(),
+                makeup_class: String::new(),
+                original_topic: String::new(),
+                mk_status: String::new(),
+                change_note: String::new(),
+            });
+        }
+    }
+
+    // Makeup events for this class's students
+    let mk_raw: Vec<(i64, String, String, String, String, String, String, String)> = sqlx::query_as(
+        r#"SELECT m.student_id,
+                  COALESCE(m.original_topic, ''),
+                  COALESCE(m.makeup_type, ''),
+                  COALESCE(m.makeup_class, ''),
+                  COALESCE(m.status, ''),
+                  COALESCE(m.absent_date, ''),
+                  COALESCE(m.lesson_num, ''),
+                  COALESCE(mc.name, m.makeup_class, '')
+           FROM makeup_lessons m
+           LEFT JOIN classes mc ON m.makeup_class = mc.id
+           WHERE m.original_class_id = ? AND m.is_deleted = 0
+           ORDER BY m.id DESC"#
+    )
+    .bind(id)
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+
+    for (sid, otopic, mk_type, _mk_class, mk_st, absent_date, lesson_num, mc_name) in &mk_raw {
+        let sname = student_names.get(sid).cloned().unwrap_or_default();
+        let sort_key = format!("{}_mk_{}", absent_date, otopic);
+        let ev_type = match mk_st.as_str() {
+            "scheduled" => "makeup_scheduled".to_string(),
+            "waiting" => "makeup_waiting".to_string(),
+            "done" => "makeup_done".to_string(),
+            _ => "makeup".to_string(),
+        };
+        report_events.push(ReportEvent {
+            sort_key,
+            date: absent_date.clone(),
+            student_name: sname,
+            event_type: ev_type,
+            lesson_label: format!("第{}課", lesson_num),
+            class_name: cls_name.clone(),
+            lesson_date: absent_date.clone(),
+            checkin_time: String::new(),
+            makeup_type: mk_type.clone(),
+            makeup_class: mc_name.clone(),
+            original_topic: otopic.clone(),
+                mk_status: mk_st.clone(),
+                change_note: String::new(),
+        });
+    }
+
+    // Attendance log history events
+    if !enroll_ids.is_empty() {
+        let placeholders: Vec<String> = enroll_ids.iter().map(|_| "?".to_string()).collect();
+        let log_sql = format!(
+            "SELECT al.enrollment_id, al.lesson_num, al.old_status, al.new_status, al.created_at
+             FROM attendance_log al
+             WHERE al.enrollment_id IN ({})
+             ORDER BY al.created_at DESC
+             LIMIT 500",
+            placeholders.join(",")
+        );
+        let mut log_q = sqlx::query_as::<_, (i64, i32, String, String, String)>(&log_sql);
+        for eid in &enroll_ids {
+            log_q = log_q.bind(eid);
+        }
+        let log_rows = log_q.fetch_all(&s.db).await.unwrap_or_default();
+
+        for (eid, lnum, old_st, new_st, created_at) in &log_rows {
+            let enr = enrollments.iter().find(|e| e.id == *eid);
+            if let Some(enr) = enr {
+                let sname = student_names.get(&enr.student_id).cloned().unwrap_or_default();
+                let lesson = lessons.iter().find(|l| l.num == *lnum);
+                let lesson_date = lesson.and_then(|l| l.date.map(|d| d.to_string())).unwrap_or_default();
+                let sort_key = format!("{}_log_{}", created_at, eid);
+                let change_note = if old_st.is_empty() {
+                    format!("初始設置為{}", new_st)
+                } else {
+                    format!("{}→{}", old_st, new_st)
+                };
+                report_events.push(ReportEvent {
+                    sort_key,
+                    date: created_at[..10].to_string(),
+                    student_name: sname,
+                    event_type: new_st.clone(),
+                    lesson_label: format!("第{}課", lnum),
+                    class_name: cls_name.clone(),
+                    lesson_date,
+                    checkin_time: created_at[11..19].to_string(),
+                    makeup_type: String::new(),
+                    makeup_class: String::new(),
+                    original_topic: String::new(),
+                    mk_status: String::new(),
+                    change_note,
+                });
+            }
+        }
+    }
+
+    // Sort by date desc
+    report_events.sort_by(|a, b| b.sort_key.cmp(&a.sort_key));
+    ctx.insert("report_events", &report_events);
+
+    // Cell detail map for grid modal (key = enrollment_id_lesson_num, value from lesson_checkins)
+    let mut cell_detail_map: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    for e in &enrollments {
+        for l in &lessons {
+            let ck_key = format!("{}_{}", e.student_id, l.id);
+            let st = checkin_map.get(&ck_key).cloned().unwrap_or_default();
+            let ctime = checkin_time_map.get(&ck_key).cloned().unwrap_or_default();
+            let name = student_names.get(&e.student_id).cloned().unwrap_or_default();
+            let lesson_date = l.date.map(|d| d.to_string()).unwrap_or_default();
+
+            // Makeup info for this student+lesson
+            let mk_key = format!("{}_{}", e.student_id, l.num);
+            let mk_st = makeup_map.get(&mk_key).cloned().unwrap_or_default();
+
+            cell_detail_map.insert(format!("{}_{}", e.id, l.num), serde_json::json!({
+                "student_name": name,
+                "lesson_num": l.num,
+                "lesson_id": l.id,
+                "lesson_label": format!("第{}課", l.num),
+                "lesson_date": lesson_date,
+                "class_name": cls_name,
+                "status": st,
+                "checkin_time": ctime,
+                "mk_status": mk_st,
+            }));
+        }
+    }
+    ctx.insert("cell_detail_map", &cell_detail_map);
+
+    // ── Standby list for this class ──
+    #[derive(serde::Serialize, sqlx::FromRow)]
+    struct StandbyRow {
+        id: i64,
+        student_id: i64,
+        status: String,
+        trigger_time: String,
+        confirmed_at: Option<String>,
+        note: Option<String>,
+    }
+    let standby_rows: Vec<StandbyRow> = sqlx::query_as(
+        r#"SELECT ls.id, ls.student_id, ls.status, ls.trigger_time,
+                  ls.confirmed_at, ls.note
+           FROM lesson_standby ls
+           WHERE ls.class_id = ? AND ls.is_deleted = 0
+           ORDER BY ls.status ASC, ls.trigger_time ASC"#
+    )
+    .bind(id)
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    ctx.insert("standby_rows", &standby_rows);
+
+    // Count waiting standby for banner
+    let waiting_count = standby_rows.iter().filter(|r| r.status == "waiting").count();
+    ctx.insert("waiting_standby_count", &waiting_count);
+
+    render(&s.tera, "class_detail.html", &ctx)
+}
+
+async fn page_attendance(State(s): State<AppState>, query: axum::extract::Query<std::collections::HashMap<String, String>>) -> Html<String> {
+    let mut ctx = page_context("/attendance");
+    let date_param = query.get("date").map(|d| d.as_str()).unwrap_or("");
+    let date_str = if date_param.is_empty() {
+        chrono::Local::now().format("%Y-%m-%d").to_string()
+    } else {
+        date_param.to_string()
+    };
+    ctx.insert("selected_date", &date_str);
+    let parts: Vec<&str> = date_str.split('-').collect();
+    let cal_year: i32 = parts.get(0).and_then(|s| s.parse().ok()).unwrap_or(2026);
+    let cal_month: i32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+    ctx.insert("cal_year", &cal_year);
+    ctx.insert("cal_month", &cal_month);
+
+    // Get lessons on this date with class info
+    #[derive(sqlx::FromRow, serde::Serialize)]
+    struct LessonWithClass {
+        lesson_id: i64,
+        class_id: i64,
+        num: i32,
+        date: String,
+        class_name: String,
+        week: String,
+        time: String,
+        class_seat: Option<i32>,
+    }
+    let lessons = sqlx::query_as::<_, LessonWithClass>(
+        r#"SELECT l.id as lesson_id, l.class_id, l.num, l.date, c.name as class_name,
+                  COALESCE(c.week,'') as week, COALESCE(c.start,'') || '-' || COALESCE(c.end,'') as time,
+                  c.seat as class_seat
+           FROM lessons l
+           JOIN classes c ON l.class_id = c.id
+           WHERE l.date = ? AND l.is_deleted = 0 AND c.is_deleted = 0
+           ORDER BY c.name, l.num"#
+    )
+    .bind(&date_str)
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+
+    // For each lesson, get checkins
+    #[derive(serde::Serialize)]
+    struct CheckinRow {
+        lesson_id: i64,
+        student_id: i64,
+        student_name: String,
+        status: String,
+        source: String,
+        checkin_time: String,
+        class_name: String,
+    }
+    let mut checkin_rows: Vec<CheckinRow> = Vec::new();
+
+    // Student name lookup
+    let all_students = sqlx::query_as::<_, crate::models::Student>(
+        "SELECT * FROM students WHERE is_deleted = 0"
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    use std::collections::HashMap;
+    let mut student_names: HashMap<i64, String> = HashMap::new();
+    let mut student_school: HashMap<i64, String> = HashMap::new();
+    for st in &all_students {
+        student_names.insert(st.id, format!("{}{}", st.surname, st.given_name));
+        student_school.insert(st.id, st.school.clone().unwrap_or_default());
+    }
+
+    if !lessons.is_empty() {
+        let lesson_ids: Vec<i64> = lessons.iter().map(|l| l.lesson_id).collect();
+        let ph: Vec<String> = lesson_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT lc.lesson_id, lc.student_id, lc.status, lc.source, lc.checkin_time
+             FROM lesson_checkins lc
+             WHERE lc.lesson_id IN ({})
+             ORDER BY lc.lesson_id, lc.student_id",
+            ph.join(",")
+        );
+        let mut q = sqlx::query_as::<_, (i64, i64, String, String, Option<String>)>(&sql);
+        for lid in &lesson_ids { q = q.bind(lid); }
+        let raw = q.fetch_all(&s.db).await.unwrap_or_default();
+
+        for (lid, sid, st, src, ctime) in &raw {
+            let sname = student_names.get(sid).cloned().unwrap_or_else(|| format!("ID:{}", sid));
+            // Find class_name for this lesson
+            let cn = lessons.iter().find(|l| l.lesson_id == *lid).map(|l| l.class_name.clone()).unwrap_or_default();
+            checkin_rows.push(CheckinRow {
+                lesson_id: *lid,
+                student_id: *sid,
+                student_name: sname,
+                status: st.clone(),
+                source: src.clone(),
+                checkin_time: ctime.clone().unwrap_or_default(),
+                class_name: cn,
+            });
+        }
+    }
+
+
+    ctx.insert("lessons", &lessons);
+    ctx.insert("checkin_rows", &checkin_rows);
+    ctx.insert("student_names", &student_names);
+
+    // ── Enrolled students per lesson (for manual check-in) ──
+    #[derive(serde::Serialize)]
+    struct AttRow {
+        lesson_id: i64,
+        student_id: i64,
+        student_name: String,
+        school: String,
+        status: String,
+        source: String,
+        checkin_time: String,
+        blocked: bool,
+    }
+    let mut attendance_rows: Vec<AttRow> = Vec::new();
+
+    // Build checkin lookup: lesson_id,student_id -> (status, source, checkin_time)
+    let mut ck_map: HashMap<String, (String, String, String)> = HashMap::new();
+    for ck in &checkin_rows {
+        ck_map.insert(
+            format!("{}_{}", ck.lesson_id, ck.student_id),
+            (ck.status.clone(), ck.source.clone(), ck.checkin_time.clone()),
+        );
+    }
+
+    // Build lesson list per class_id
+    let mut lesson_by_class: HashMap<i64, Vec<&LessonWithClass>> = HashMap::new();
+    // Build lesson_num -> lesson_id per class for blocked detection
+    let mut lesson_num_map: HashMap<i64, HashMap<i32, i64>> = HashMap::new();
+    for l in &lessons {
+        lesson_by_class.entry(l.class_id).or_default().push(l);
+        lesson_num_map.entry(l.class_id).or_default().insert(l.num, l.lesson_id);
+    }
+
+    // Fetch enrollments for each unique class
+    let mut seen_cids: HashSet<i64> = HashSet::new();
+    for l in &lessons {
+        if seen_cids.contains(&l.class_id) { continue; }
+        seen_cids.insert(l.class_id);
+
+        // Enrolled students for this class
+        let enrolled = sqlx::query_as::<_, (i64,)>(
+            "SELECT student_id FROM enrollments WHERE class_id = ? AND is_deleted = 0 AND status = 'active'"
+        )
+        .bind(l.class_id)
+        .fetch_all(&s.db)
+        .await
+        .unwrap_or_default();
+
+        let class_lessons = lesson_by_class.get(&l.class_id).unwrap();
+        for (sid,) in &enrolled {
+            let sname = student_names.get(sid).cloned().unwrap_or_else(|| format!("ID:{}", sid));
+            for cl in class_lessons {
+                let ck_key = format!("{}_{}", cl.lesson_id, sid);
+                let (status, source, ctime) = ck_map.get(&ck_key)
+                    .cloned()
+                    .unwrap_or_else(|| (String::new(), String::new(), String::new()));
+
+                // Blocked detection: check previous lesson
+                let blocked = if cl.num > 1 {
+                    if let Some(num_map) = lesson_num_map.get(&cl.class_id) {
+                        if let Some(prev_lid) = num_map.get(&(cl.num - 1)) {
+                            let prev_key = format!("{}_{}", prev_lid, sid);
+                            let (prev_st, _, _) = ck_map.get(&prev_key)
+                                .cloned()
+                                .unwrap_or_else(|| (String::new(), String::new(), String::new()));
+                            prev_st != "present" && prev_st != "late"
+                        } else { false }
+                    } else { false }
+                } else { false };
+
+                let sch = student_school.get(sid).cloned().unwrap_or_default();
+                let src = if source.is_empty() { "enrolled".to_string() } else { source.clone() };
+                // Format checkin_time: "2026-05-17 17:30:00" -> "5/17 17:30"
+                let short_ctime = if ctime.len() >= 16 {
+                    // YYYY-MM-DD HH:MM:SS -> M/D HH:MM
+                    let parts: Vec<&str> = ctime.split(' ').collect();
+                    if parts.len() == 2 {
+                        let date_parts: Vec<&str> = parts[0].split('-').collect();
+                        if date_parts.len() == 3 {
+                            format!("{}/{} {}", 
+                                date_parts[1].trim_start_matches('0'),
+                                date_parts[2].trim_start_matches('0'),
+                                &parts[1][..5])
+                        } else { ctime.clone() }
+                    } else { ctime.clone() }
+                } else { ctime.clone() };
+                attendance_rows.push(AttRow {
+                    lesson_id: cl.lesson_id,
+                    student_id: *sid,
+                    student_name: sname.clone(),
+                    school: sch,
+                    status,
+                    source: src,
+                    checkin_time: short_ctime,
+                    blocked,
+                });
+            }
+        }
+    }
+    ctx.insert("attendance_rows", &attendance_rows);
+
+    // Group attendance_rows by lesson_id for template
+    let mut attendance_by_lesson: HashMap<i64, Vec<&AttRow>> = HashMap::new();
+    for ar in &attendance_rows {
+        attendance_by_lesson.entry(ar.lesson_id).or_default().push(ar);
+    }
+    ctx.insert("attendance_by_lesson", &attendance_by_lesson);
+
+
+    // Group checkins by lesson_id
+
+    use std::collections::HashSet;
+    let mut checkins_by_lesson: HashMap<String, Vec<&CheckinRow>> = HashMap::new();
+    let mut has_checkins: HashSet<i64> = HashSet::new();
+    for ck in &checkin_rows {
+        checkins_by_lesson.entry(ck.lesson_id.to_string()).or_default().push(ck);
+        has_checkins.insert(ck.lesson_id);
+    }
+    ctx.insert("checkins_by_lesson", &checkins_by_lesson);
+    ctx.insert("has_checkins", &has_checkins);
+
+    // ── Standby students for each lesson's class ──
+    #[derive(serde::Serialize)]
+    struct StandbyInfo {
+        standby_id: i64,
+        student_id: i64,
+        student_name: String,
+        trigger_time: String,
+        note: String,
+        class_id: i64,
+    }
+    let mut standby_by_class: HashMap<i64, Vec<StandbyInfo>> = HashMap::new();
+    if !lessons.is_empty() {
+        let class_ids: Vec<i64> = lessons.iter().map(|l| l.class_id).collect();
+        let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let unique_cids: Vec<i64> = class_ids.into_iter().filter(|c| seen.insert(*c)).collect();
+        let cph: Vec<String> = unique_cids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT ls.id, ls.student_id, ls.trigger_time, COALESCE(ls.note,'') as note, ls.class_id
+             FROM lesson_standby ls
+             WHERE ls.class_id IN ({}) AND ls.status = 'waiting' AND ls.is_deleted = 0
+             ORDER BY ls.trigger_time ASC",
+            cph.join(",")
+        );
+        let mut q = sqlx::query_as::<_, (i64, i64, String, String, i64)>(&sql);
+        for cid in &unique_cids { q = q.bind(cid); }
+        let raw_sb = q.fetch_all(&s.db).await.unwrap_or_default();
+        for (sid, stuid, ttime, note, cid) in &raw_sb {
+            let sname = student_names.get(stuid).cloned().unwrap_or_else(|| format!("ID:{}", stuid));
+            standby_by_class.entry(*cid).or_default().push(StandbyInfo {
+                standby_id: *sid,
+                student_id: *stuid,
+                student_name: sname,
+                trigger_time: ttime.clone(),
+                note: note.clone(),
+                class_id: *cid,
+            });
+        }
+    }
+    ctx.insert("standby_by_class", &standby_by_class);
+
+    // ── Active scan session ──
+    let active_scan: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT id, lesson_id FROM scan_sessions WHERE active = 1 ORDER BY started_at DESC LIMIT 1"
+    )
+    .fetch_optional(&s.db)
+    .await
+    .unwrap_or_default();
+    ctx.insert("active_scan_lesson_id", &active_scan.map(|(_, lid)| lid));
+
+    render(&s.tera, "attendance.html", &ctx)
+}
+
+async fn page_makeups(State(s): State<AppState>) -> Html<String> {
+    use std::collections::HashMap;
+    let mut ctx = page_context("/makeups");
+
+    // 1. Existing makeup_lessons
+    let makeups = sqlx::query_as::<_, crate::models::MakeupLesson>(
+        "SELECT * FROM makeup_lessons WHERE is_deleted = 0 ORDER BY id DESC LIMIT 200"
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+
+    // 2. Build set of (student_id, lesson_num) that already have a makeup
+    let mut makeup_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for mk in &makeups {
+        if let (Some(sid), Some(lnum)) = (Some(mk.student_id), mk.lesson_num.as_deref()) {
+            makeup_keys.insert(format!("{}_{}", sid, lnum));
+        }
+    }
+
+    // 3. Attendance records with absent/leave that DON'T have a makeup yet
+    #[derive(Debug, sqlx::FromRow, serde::Serialize)]
+    struct AbsenteeItem {
+        student_id: i64,
+        original_class_id: i64,
+        original_topic: String,
+        lesson_num: String,
+        absent_date: Option<String>,
+        class_name: Option<String>,
+    }
+    let absentees: Vec<AbsenteeItem> = sqlx::query_as::<_, AbsenteeItem>(
+        r#"SELECT e.student_id as student_id,
+                   c.id as original_class_id,
+                   COALESCE(t.name,'') as original_topic,
+                   CAST(a.lesson_num AS TEXT) as lesson_num,
+                   l.date as absent_date,
+                   c.name as class_name
+            FROM attendances a
+            JOIN enrollments e ON a.enrollment_id = e.id AND e.is_deleted = 0
+            JOIN classes c ON e.class_id = c.id
+            JOIN topics t ON c.topic_id = t.id
+            LEFT JOIN lessons l ON l.class_id = c.id AND l.num = a.lesson_num AND l.is_deleted = 0
+            WHERE a.status IN ('absent','leave')
+            ORDER BY a.lesson_num, c.name"#
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+
+    // 4. Merge: create virtual MakeupLesson entries for absentees not in makeup list
+    use crate::models::MakeupLesson;
+    let mut merged: Vec<MakeupLesson> = makeups;
+    for ab in &absentees {
+        let key = format!("{}_{}", ab.student_id, ab.lesson_num);
+        if !makeup_keys.contains(&key) {
+            merged.push(MakeupLesson {
+                id: -(ab.student_id), // negative = virtual (won't collide with real ids)
+                student_id: ab.student_id,
+                original_class_id: Some(ab.original_class_id),
+                original_topic: Some(ab.original_topic.clone()),
+                lesson_num: Some(ab.lesson_num.clone()),
+                absent_date: ab.absent_date.clone(),
+                makeup_type: None,
+                makeup_class: ab.class_name.clone(),
+                target_lesson_id: None,
+                status: Some("absent".to_string()), // 'absent' status = needs arrangement
+                is_deleted: false,
+            });
+        }
+    }
+
+    ctx.insert("makeups", &merged);
+
+    // Student name lookup
+    let all_students = sqlx::query_as::<_, crate::models::Student>(
+        "SELECT * FROM students WHERE is_deleted = 0"
+    )
+    .fetch_all(&s.db)
+    .await
+    .unwrap_or_default();
+    let mut student_names: HashMap<i64, String> = HashMap::new();
+    for st in &all_students {
+        student_names.insert(st.id, format!("{}{}", st.surname, st.given_name));
+    }
+    ctx.insert("student_names", &student_names);
+
+    // 5. Available classes for inline makeup arrangement
+    // Collect unique original_class_id from merged list
+    let mut class_ids: Vec<i64> = merged.iter()
+        .filter_map(|mk| mk.original_class_id)
+        .collect();
+    class_ids.sort();
+    class_ids.dedup();
+
+    // Build topic_id -> [available classes] for each class
+    let mut av_map: HashMap<i64, Vec<serde_json::Value>> = HashMap::new();
+    for cid in &class_ids {
+        // Find topic_id for this class
+        let topic_id: Option<i64> = sqlx::query_scalar("SELECT topic_id FROM classes WHERE id = ?")
+            .bind(cid)
+            .fetch_optional(&s.db)
+            .await
+            .unwrap_or(None);
+        if let Some(tid) = topic_id {
+            let rows = sqlx::query(
+                r#"SELECT c.id, c.name, c.week, c.start, c.end, c.seat,
+                          COUNT(e.id) as enrolled
+                   FROM classes c
+                   LEFT JOIN enrollments e ON c.id = e.class_id AND e.is_deleted = 0
+                   WHERE c.topic_id = ? AND c.id != ? AND c.is_deleted = 0 AND c.is_completed = 0
+                   GROUP BY c.id
+                   ORDER BY c.id"#
+            )
+            .bind(tid)
+            .bind(cid)
+            .fetch_all(&s.db)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row: sqlx::sqlite::SqliteRow| {
+                let id: i64 = row.get(0);
+                let name: Option<String> = row.get(1);
+                let week: Option<String> = row.get(2);
+                let start: Option<String> = row.get(3);
+                let end: Option<String> = row.get(4);
+                let seat: i32 = row.get(5);
+                let enrolled: i32 = row.get(6);
+                let available = seat - enrolled;
+                serde_json::json!({
+                    "id": id,
+                    "name": name.unwrap_or_default(),
+                    "week": week.unwrap_or_default(),
+                    "time": format!("{}-{}", start.unwrap_or_default(), end.unwrap_or_default()),
+                    "available": available,
+                    "full": available <= 0,
+                    "seat": if available > 0 { format!("剩{}位", available) } else { "滿".to_string() },
+                })
+            })
+            .collect();
+            av_map.insert(*cid, rows);
+        }
+    }
+    ctx.insert("av_map", &av_map);
+    ctx.insert("av_classes", &serde_json::json!({})); // placeholder, used by template
+
+    render(&s.tera, "makeups.html", &ctx)
+}
+
+async fn page_login(State(s): State<AppState>) -> Html<String> {
+    let ctx = page_context("/login");
+    render(&s.tera, "login.html", &ctx)
+}
+
+// ─── Class tree API ─────────────────────────────────────────────────────────
+
+async fn api_class_tree(
+    State(s): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> crate::error::AppResultJson {
+    crate::auth::get_current_user_id(&headers)?;
+
+    let year_courses = sqlx::query_as::<_, crate::models::YearCourse>(
+        "SELECT * FROM year_courses WHERE is_deleted = 0 ORDER BY year DESC, id"
+    )
+    .fetch_all(&s.db)
+    .await?;
+
+    let topics = sqlx::query_as::<_, crate::models::Topic>(
+        "SELECT * FROM topics WHERE is_deleted = 0 AND is_archived = 0 ORDER BY sort, id"
+    )
+    .fetch_all(&s.db)
+    .await?;
+
+    let classes = sqlx::query_as::<_, crate::models::Class>(
+        "SELECT * FROM classes WHERE is_deleted = 0 AND is_completed = 0 ORDER BY id"
+    )
+    .fetch_all(&s.db)
+    .await?;
+
+    Ok(axum::Json(serde_json::json!({
+        "ok": true,
+        "data": {
+            "year_courses": year_courses,
+            "topics": topics,
+            "classes": classes,
+        }
+    })))
+}
+
+// ─── API routes ────────────────────────────────────────────────────────────
+
+fn api_routes() -> Router<AppState> {
+    use axum::routing::{post, put, delete};
+    Router::new()
+        .route("/class-tree", get(api_class_tree))
+        .route("/auth/login", post(handlers::auth::login))
+        .route("/auth/me", get(handlers::auth::me))
+        .route("/students", get(handlers::students::list))
+        .route("/students", post(handlers::students::create))
+        .route("/students/{id}", get(handlers::students::get))
+        .route("/students/{id}", put(handlers::students::update))
+        .route("/students/{id}", delete(handlers::students::delete))
+        .route("/year_courses", get(handlers::classes::list_year_courses))
+        .route("/year_courses", post(handlers::classes::create_year_course))
+        .route("/topics", get(handlers::classes::list_topics))
+        .route("/topics", post(handlers::classes::create_topic))
+        .route("/classes", get(handlers::classes::list_classes))
+        .route("/classes", post(handlers::classes::create_class))
+        .route("/classes/{id}/lessons", get(handlers::classes::list_lessons))
+        .route("/classes/{id}/enrollments", get(handlers::classes::list_enrollments))
+        .route("/classes/{id}/checkins", get(handlers::classes::list_checkins))
+        .route("/lessons/{id}", put(handlers::classes::update_lesson))
+        .route("/enrollments", post(handlers::classes::create_enrollment))
+        .route("/enrollments/{id}", delete(handlers::classes::delete_enrollment))
+        .route("/enrollments/{id}/payment", put(handlers::classes::update_payment))
+        .route("/classes/{id}/ai-parse", post(handlers::classes::ai_parse))
+        .route("/classes/{id}/ai-enroll", post(handlers::classes::ai_enroll))
+        .route("/attendance", put(handlers::attendance::update_checkin))
+        .route("/makeups", get(handlers::attendance::list_makeups))
+        .route("/makeups", post(handlers::attendance::create_makeup))
+        .route("/standby/confirm", post(handlers::attendance::confirm_standby))
+        .route("/qr-checkin", post(handlers::attendance::qr_checkin))
+        .route("/scan/start", post(handlers::attendance::scan_start))
+        .route("/scan/stop", post(handlers::attendance::scan_stop))
+        .route("/scan/active", get(handlers::attendance::scan_active))
+        .route("/attendance/daily", get(handlers::attendance::daily_checkin))
+        .route("/attendance/calendar", get(handlers::attendance::calendar))
+        .route("/init_data", get(handlers::classes::init_data))
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub db: sqlx::SqlitePool,
+    pub cfg: config::Config,
+    pub tera: Option<Arc<Tera>>,
+}

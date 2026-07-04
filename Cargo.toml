@@ -1,0 +1,36 @@
+[package]
+name = "course_manage_v2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+regex = "1"
+# Web framework
+axum = { version = "0.8", features = ["macros", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+
+# Database
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+
+# Auth
+jsonwebtoken = "9"
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Utils
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+dotenvy = "0.15"
+color-eyre = "0.6"
+tera = "1"
+serde_html_form = "0.2"
