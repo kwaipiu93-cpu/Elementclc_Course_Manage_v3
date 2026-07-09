@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { Calendar as CalendarIcon, List, Loader2, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import ScanPanel from '../components/ScanPanel';
 import LessonBoard from '../components/LessonBoard';
+import WeekTimeline from '../components/WeekTimeline';
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -110,32 +111,16 @@ export default function Attendance() {
     refetchInterval: scanningLessonId ? 3000 : false,
   });
 
-  // Calendar — fetch months that the current view covers
+  // Calendar — fetch current month for month view
   const calYear = calWeekStart.getFullYear();
   const calMonth = calWeekStart.getMonth() + 1;
   const calMonthName = ['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'][calMonth - 1];
 
-  // For week view, also fetch next month if the week spans across
-  const weekEnd = new Date(calWeekStart);
-  weekEnd.setDate(weekEnd.getDate() + 6);
-  const nextMonth = weekEnd.getMonth() !== calWeekStart.getMonth() ? weekEnd.getMonth() + 1 : 0;
-
   const { data: calApiData } = useQuery({
     queryKey: ['calendar', calYear, calMonth],
     queryFn: () => api.getAttendanceCalendar(calYear, calMonth),
-    enabled: calMode !== 'list',
+    enabled: calMode === 'month',
   });
-
-  const { data: calApiDataNext } = useQuery({
-    queryKey: ['calendar', calYear, nextMonth],
-    queryFn: () => api.getAttendanceCalendar(calYear, nextMonth),
-    enabled: calMode === 'week' && nextMonth > 0,
-  });
-
-  // Merged calendar data
-  const mergedCalData = (calMode === 'week' && calApiDataNext)
-    ? { ...(calApiData as any || {}), ...(calApiDataNext as any || {}) }
-    : (calApiData as any || {});
 
   // Mutations
   const updateStatus = useMutation({
@@ -372,9 +357,9 @@ export default function Attendance() {
 
       {/* ═══ Calendar: Week View ═══ */}
       {calMode === 'week' && (
-        <div className="bg-white rounded-xl shadow-sm p-4 mb-4">
+        <div>
           {/* Week nav */}
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-3">
             <button
               onClick={() => {
                 const prev = new Date(calWeekStart);
@@ -405,55 +390,7 @@ export default function Attendance() {
             </button>
           </div>
 
-          {/* 7-day columns */}
-          <div className="grid grid-cols-7 gap-1">
-            {(() => {
-              const days = ['日','一','二','三','四','五','六'];
-              const cols: { label: string; dateStr: string; dayNum: number; data: any; isToday: boolean }[] = [];
-              const todayStr = new Date().toLocaleDateString('en-CA');
-              for (let i = 0; i < 7; i++) {
-                const d = new Date(calWeekStart);
-                d.setDate(d.getDate() + i);
-                const dateStr = d.toLocaleDateString('en-CA');
-                const dow = d.getDay();
-                cols.push({
-                  label: days[dow],
-                  dateStr,
-                  dayNum: d.getDate(),
-                  data: mergedCalData[dateStr] || null,
-                  isToday: dateStr === todayStr,
-                });
-              }
-              return cols.map(col => (
-                <div
-                  key={col.dateStr}
-                  onClick={() => goToDate(col.dateStr)}
-                  className={`cursor-pointer rounded-lg p-2 text-center border transition-colors hover:border-blue-300 ${
-                    col.isToday ? 'border-blue-400 bg-blue-50 ring-1 ring-blue-300' :
-                    col.data ? 'border-gray-200 bg-green-50' :
-                    'border-gray-100 bg-gray-50'
-                  }`}
-                  style={{ minHeight: 100 }}
-                >
-                  <div className="text-[11px] text-gray-400 font-medium mb-1">{col.label}</div>
-                  <div className={`text-lg font-bold mb-1 ${col.isToday ? 'text-blue-600' : 'text-gray-700'}`}>
-                    {col.dayNum}
-                  </div>
-                  {col.data ? (
-                    <div className="text-[10px] leading-tight space-y-0.5">
-                      <div className="text-gray-600">📚 {col.data.lessons}節</div>
-                      {col.data.present > 0 && <div className="text-green-700">✅ {col.data.present}</div>}
-                      {col.data.leave > 0 && <div className="text-blue-700">📋 {col.data.leave}</div>}
-                      {col.data.absent > 0 && <div className="text-red-700">❌ {col.data.absent}</div>}
-                      {col.data.unchecked > 0 && <div className="text-yellow-600">🟡 {col.data.unchecked}</div>}
-                    </div>
-                  ) : (
-                    <div className="text-[10px] text-gray-300 mt-1">—</div>
-                  )}
-                </div>
-              ));
-            })()}
-          </div>
+          <WeekTimeline weekStart={calWeekStart} onDayClick={goToDate} />
         </div>
       )}
 
