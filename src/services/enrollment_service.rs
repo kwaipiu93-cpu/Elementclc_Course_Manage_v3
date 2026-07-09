@@ -32,6 +32,10 @@ pub async fn create(pool: &SqlitePool, req: CreateEnrollment) -> AppResult<Enrol
                 .bind(enr.id)
                 .fetch_one(pool)
                 .await?;
+
+            // Also create catchup checkins for past lessons on restore
+            create_catchup_checkins(pool, req.student_id, req.class_id, enr.id).await?;
+
             return Ok(restored);
         } else {
             // Already active – just return it
@@ -53,6 +57,10 @@ pub async fn create(pool: &SqlitePool, req: CreateEnrollment) -> AppResult<Enrol
     .await?;
 
     let id = result.last_insert_rowid();
+
+    // Auto-create catchup_required for past lessons (late enrollment)
+    create_catchup_checkins(pool, req.student_id, req.class_id, id).await?;
+
     let enr = sqlx::query_as::<_, Enrollment>("SELECT * FROM enrollments WHERE id = ?")
         .bind(id)
         .fetch_one(pool)
@@ -161,6 +169,66 @@ pub async fn transfer_class(pool: &SqlitePool, id: i64, new_class_id: i64) -> Ap
     .bind(new_class_id)
     .execute(pool)
     .await?;
+
+    Ok(())
+}
+
+// ─── Late Enrollment Catch-up ────────────────────────────────────────
+
+/// When a student is enrolled after a class has started, auto-create
+/// `catchup_required` checkins for all past lessons that don't have checkins yet.
+/// This blocks the student from attending live classes until they complete
+/// video makeup for the missed lessons.
+pub async fn create_catchup_checkins(
+    pool: &SqlitePool,
+    student_id: i64,
+    class_id: i64,
+    enrollment_id: i64,
+) -> AppResult<()> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    // Find past lessons for this class that the student hasn't checked into
+    let past_lessons: Vec<(i64, i32)> = sqlx::query_as(
+        r#"SELECT l.id, l.num FROM lessons l
+           WHERE l.class_id = ? AND l.is_deleted = 0 AND l.date < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM lesson_checkins lc
+               WHERE lc.lesson_id = l.id AND lc.student_id = ?
+             )
+           ORDER BY l.num"#
+    )
+    .bind(class_id)
+    .bind(&today)
+    .bind(student_id)
+    .fetch_all(pool)
+    .await?;
+
+    if past_lessons.is_empty() {
+        return Ok(());
+    }
+
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    for (lesson_id, lesson_num) in &past_lessons {
+        sqlx::query(
+            "INSERT OR IGNORE INTO lesson_checkins (lesson_id, student_id, enrollment_id, status, source) VALUES (?, ?, ?, 'catchup_required', 'enrolled')"
+        )
+        .bind(lesson_id)
+        .bind(student_id)
+        .bind(enrollment_id)
+        .execute(pool)
+        .await?;
+
+        // Log
+        sqlx::query(
+            "INSERT INTO attendance_log (enrollment_id, lesson_num, old_status, new_status, created_at) VALUES (?, ?, '', 'catchup_required', ?)"
+        )
+        .bind(enrollment_id)
+        .bind(lesson_num)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+    }
 
     Ok(())
 }

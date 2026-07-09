@@ -48,6 +48,7 @@ const STATUS_TEXT: Record<string, string> = {
   'makeup':               '補堂出席',
   'recording_room_present': '課室錄播',
   'video_makeup':         '線上錄播',
+  'catchup_required':     '需錄播補堂',
 };
 
 // ─── Student Card ──────────────────────────────────────────────────
