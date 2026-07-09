@@ -43,18 +43,136 @@ const isInRange = (letter: string, range: string): boolean => {
   return letter >= m[1] && letter <= m[2];
 };
 
-const STATUS_BADGE: Record<string, { text: string; bg: string; fg: string }> = {
-  'present':              { text: '✅出席', bg: 'bg-green-50',   fg: 'text-green-700' },
-  'makeup':               { text: '✅補堂', bg: 'bg-green-50',   fg: 'text-green-700' },
-  'recording_room_present': { text: '✅課室錄播', bg: 'bg-emerald-50', fg: 'text-emerald-700' },
-  'video_makeup':         { text: '✅線上錄播', bg: 'bg-purple-50',  fg: 'text-purple-700' },
-  'leave':                { text: '📋請假', bg: 'bg-blue-50',    fg: 'text-blue-700' },
-  'absent':               { text: '❌缺勤', bg: 'bg-red-50',     fg: 'text-red-700' },
-  'waiting':              { text: '‼️候補', bg: 'bg-red-50',     fg: 'text-red-700' },
-  'scheduled_room':       { text: '⌛️課室錄播', bg: 'bg-amber-50',  fg: 'text-amber-700' },
-  'scheduled_video':      { text: '⌛️線上錄播', bg: 'bg-purple-50',  fg: 'text-purple-700' },
-  'scheduled_classroom':  { text: '⌛️待補', bg: 'bg-amber-50',  fg: 'text-amber-700' },
+const STATUS_TEXT: Record<string, string> = {
+  'present':              '課堂出席',
+  'makeup':               '補堂出席',
+  'recording_room_present': '課室錄播',
+  'video_makeup':         '線上錄播',
 };
+
+// ─── Student Card ──────────────────────────────────────────────────
+
+function StudentCard({ s, idx, lessonId, onToggleHomework }: {
+  s: Stu; idx: number; lessonId: number;
+  onToggleHomework?: (lessonId: number, studentId: number, done: boolean) => void;
+}) {
+  const avatarBg = useMemo(() => {
+    const colors = ['#3b82f6','#ef4444','#10b981','#f59e0b','#8b5cf6','#ec4899','#06b6d4','#84cc16'];
+    const ci = s.studentId % colors.length;
+    return colors[ci];
+  }, [s.studentId]);
+
+  // Get student photo URL from the API
+  const photoUrl = `/api/students/${s.studentId}/avatar`;
+
+  return (
+    <div
+      className="bg-white rounded-xl shadow-md flex gap-4 items-stretch overflow-hidden hover:shadow-lg transition-shadow"
+      style={{
+        borderLeft: '8px solid #28a745',
+        animation: `slideIn 0.35s ease-out`,
+        ...(idx === 0 ? { boxShadow: '0 0 0 2px #22c55e, 0 4px 12px rgba(0,0,0,0.15)' } : {}),
+      }}
+    >
+      {/* Avatar — Gary style: 90×115 */}
+      <div className="shrink-0" style={{ width: 90, minHeight: 115 }}>
+        <img
+          src={photoUrl}
+          alt={s.name}
+          className="w-full h-full object-cover"
+          style={{ width: 90, height: 115 }}
+          onError={(e) => {
+            // Fallback: colored block with initial
+            const t = e.currentTarget;
+            t.style.display = 'none';
+            const fallback = document.createElement('div');
+            fallback.className = 'w-full h-full flex items-center justify-center text-white font-bold text-3xl';
+            fallback.style.width = '90px';
+            fallback.style.height = '115px';
+            fallback.style.background = avatarBg;
+            fallback.textContent = s.name.charAt(0);
+            t.parentElement?.appendChild(fallback);
+          }}
+        />
+      </div>
+
+      {/* Info */}
+      <div className="flex-1 min-w-0 py-2.5 pr-3 flex flex-col gap-1.5">
+        {/* Header row: name + time */}
+        <div className="flex items-start justify-between gap-2 border-b border-gray-100 pb-1.5">
+          <span className="text-[17px] font-bold text-blue-600 truncate">{s.name}</span>
+          {s.checkinTime && (
+            <span className="text-[13px] text-green-600 font-bold whitespace-nowrap shrink-0">
+              🕐{s.checkinTime}
+            </span>
+          )}
+        </div>
+
+        {/* School */}
+        <div className="text-[13px] text-gray-500">
+          <span className="font-semibold text-gray-400 mr-1">學校:</span>
+          {s.school || '—'}
+        </div>
+
+        {/* Phone */}
+        {s.phone && (
+          <div className="text-[13px] text-gray-500">
+            <span className="font-semibold text-gray-400 mr-1">電話:</span>
+            {s.phone}
+          </div>
+        )}
+
+        {/* Email */}
+        {s.email && (
+          <div className="text-[12px] text-gray-400 truncate">
+            <span className="font-semibold text-gray-400 mr-1">Email:</span>
+            {s.email}
+          </div>
+        )}
+
+        {/* Pay status + Note + Homework row */}
+        <div className="flex items-center gap-2 flex-wrap mt-1">
+          {/* Pay status */}
+          <span className={`shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full ${
+            s.payStatus === '已繳'
+              ? 'bg-green-100 text-green-700'
+              : 'bg-red-100 text-red-600'
+          }`}>
+            {s.payStatus === '已繳' ? '💰 已繳' : '💰 未繳'}
+          </span>
+
+          {/* Status badge */}
+          {STATUS_TEXT[s.status] && (
+            <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
+              ✅ {STATUS_TEXT[s.status]}
+            </span>
+          )}
+
+          {/* Homework toggle — Gary style pill */}
+          {!s.blocked && !s.locked && onToggleHomework && (
+            <button
+              onClick={() => onToggleHomework(lessonId, s.studentId, !s.homeworkDone)}
+              className={`shrink-0 inline-flex items-center gap-1 px-3 py-1 rounded-full text-[12px] font-bold border-2 transition-all ${
+                s.homeworkDone
+                  ? 'bg-green-50 text-green-700 border-green-300 hover:bg-green-100'
+                  : 'bg-red-50 text-red-600 border-red-300 hover:bg-red-100'
+              }`}
+            >
+              {s.homeworkDone ? '✓ 已交功課' : '✗ 未交功課'}
+            </button>
+          )}
+        </div>
+
+        {/* Note */}
+        {s.note?.trim() && (
+          <div className="mt-0.5 px-2 py-1.5 bg-amber-50 border border-amber-200 rounded text-[12px] text-amber-800 leading-relaxed">
+            📝 <span className="font-medium">備註：</span>{s.note}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─── Component ─────────────────────────────────────────────────────
 
@@ -63,7 +181,6 @@ export default function LessonBoard({ lessonId, students, onToggleHomework }: Pr
   const [fullscreen, setFullscreen] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
 
-  // Listen for fullscreen exit (Escape key, etc.)
   useEffect(() => {
     const handler = () => setFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', handler);
@@ -80,12 +197,10 @@ export default function LessonBoard({ lessonId, students, onToggleHomework }: Pr
         await document.exitFullscreen();
         setFullscreen(false);
       }
-    } catch {
-      // Browser may block fullscreen if not triggered by user gesture
-    }
+    } catch { /* blocked */ }
   }, []);
 
-  // Only checked-in students, sorted by checkinTime DESC
+  // Group checked-in students by name initial
   const groups = useMemo(() => {
     const r1 = 'A-I';
     const r2 = cols3 ? 'J-Q' : 'J-Z';
@@ -134,73 +249,24 @@ export default function LessonBoard({ lessonId, students, onToggleHomework }: Pr
     );
   }
 
-  const renderColumn = (group: Stu[], title: string, accentColor: string, borderColor: string) => (
-    <div className="flex flex-col" style={{ borderTop: `3px solid ${accentColor}` }}>
-      <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b border-gray-100">
-        <span className="font-bold text-xs text-gray-700">{title}</span>
-        <span className="text-[10px] text-gray-400">{group.length}人</span>
+  const renderColumn = (group: Stu[], title: string, accentColor: string) => (
+    <div className="flex flex-col" style={{ borderTop: `4px solid ${accentColor}` }}>
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-800 border-b border-gray-700">
+        <span className="font-bold text-sm text-gray-200">{title}</span>
+        <span className="text-[11px] text-gray-400">{group.length}人</span>
       </div>
-      <div className="flex-1 space-y-1.5 p-2 min-h-[60px] max-h-[50vh] overflow-y-auto">
+      <div className="flex-1 space-y-3 p-3 min-h-[80px] max-h-[55vh] overflow-y-auto">
         {group.length === 0 ? (
-          <div className="text-center text-gray-300 text-xs py-6">—</div>
+          <div className="text-center text-gray-500 text-xs py-8">—</div>
         ) : (
           group.slice(0, 80).map((s, idx) => (
-            <div
+            <StudentCard
               key={s.studentId}
-              className={`bg-white rounded-lg px-2.5 py-2 border border-gray-100 shadow-sm ${
-                idx === 0 ? 'ring-2 ring-green-300' : ''
-              }`}
-              style={{ borderLeft: `5px solid ${borderColor}` }}
-            >
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
-                  {s.name.charAt(0)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-1">
-                    <div className="flex items-center gap-1 min-w-0">
-                      <span className="text-xs font-semibold text-gray-800 truncate">
-                        {s.name}
-                      </span>
-                      {/* 💰 繳費 — 醒目顯示 */}
-                      <span className={`shrink-0 text-[10px] font-bold ${
-                        s.payStatus === '已繳' ? 'text-green-600' : 'text-red-500'
-                      }`}>
-                        {s.payStatus === '已繳' ? '💰已繳' : '💰未繳'}
-                      </span>
-                    </div>
-                    <span className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] font-medium ${STATUS_BADGE[s.status]?.bg || 'bg-green-50'} ${STATUS_BADGE[s.status]?.fg || 'text-green-700'}`}>
-                      {STATUS_BADGE[s.status]?.text || '✅出席'}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-[10px] text-gray-400 mt-0.5">
-                    {s.school && <span className="truncate">{s.school}</span>}
-                    {s.checkinTime && <span>· 🕐{s.checkinTime}</span>}
-                  </div>
-                </div>
-              </div>
-              {/* 功課 — 灰色按鈕 */}
-              <div className="mt-1.5 flex items-center gap-2">
-                {!s.blocked && !s.locked && onToggleHomework ? (
-                  <button
-                    onClick={() => onToggleHomework(lessonId, s.studentId, !s.homeworkDone)}
-                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
-                  >
-                    {s.homeworkDone ? '✅已交' : '❌未交'}
-                  </button>
-                ) : (
-                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 text-gray-500">
-                    {s.homeworkDone ? '✅已交' : '❌未交'}
-                  </span>
-                )}
-              </div>
-              {/* 📝 備註 — 醒目底色塊 */}
-              {s.note?.trim() && (
-                <div className="mt-1.5 px-2 py-1.5 bg-amber-50 border border-amber-200 rounded text-[10px] text-amber-800 leading-relaxed">
-                  📝 <span className="font-medium">備註：</span>{s.note}
-                </div>
-              )}
-            </div>
+              s={s}
+              idx={idx}
+              lessonId={lessonId}
+              onToggleHomework={onToggleHomework}
+            />
           ))
         )}
       </div>
@@ -208,58 +274,76 @@ export default function LessonBoard({ lessonId, students, onToggleHomework }: Pr
   );
 
   const boardContent = (
-    <div ref={boardRef} className={`${fullscreen ? 'fixed inset-0 z-[9999] bg-white overflow-hidden' : ''}`}>
-      {/* Top bar */}
-      <div className={`flex items-center justify-between px-4 py-2 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200 ${fullscreen ? 'px-6 py-3' : ''}`}>
-        <span className={`font-medium ${fullscreen ? 'text-green-700 text-base' : 'text-xs text-green-700'}`}>
-          ✅ {totalChecked} 人已簽到
-        </span>
+    <div
+      ref={boardRef}
+      className={`bg-gray-900 ${fullscreen ? 'fixed inset-0 z-[9999] overflow-hidden' : 'rounded-b-lg'}`}
+    >
+      {/* Top stats bar — Gary style */}
+      <div
+        className="flex items-center justify-between px-4 py-3 border-b border-gray-700"
+        style={{
+          background: 'linear-gradient(to right, #1e293b, #0f172a)',
+          borderLeft: '6px solid #3b82f6',
+        }}
+      >
+        <div className="flex items-center gap-8">
+          <div className="text-white">
+            <span className="text-sm text-gray-400">總人數</span>
+            <span className="ml-2 text-2xl font-bold text-blue-400">{students.length}</span>
+          </div>
+          <div className="text-white">
+            <span className="text-sm text-gray-400">已簽到</span>
+            <span className="ml-2 text-2xl font-bold text-green-400">{totalChecked}</span>
+          </div>
+        </div>
         <div className="flex items-center gap-2">
-          <div className="flex bg-gray-200 rounded-md p-0.5">
+          <div className="flex bg-gray-700 rounded-md p-0.5">
             <button
               onClick={() => setCols3(false)}
-              className={`px-2 py-0.5 rounded transition-colors ${!cols3 ? 'bg-white text-gray-700 shadow-sm font-medium' : 'text-gray-500 hover:text-gray-600'} ${fullscreen ? 'text-sm px-3 py-1' : 'text-[10px]'}`}
+              className={`px-2 py-1 rounded transition-colors text-[11px] ${!cols3 ? 'bg-white text-gray-800 shadow-sm font-medium' : 'text-gray-400 hover:text-gray-200'}`}
             >
               2欄
             </button>
             <button
               onClick={() => setCols3(true)}
-              className={`px-2 py-0.5 rounded transition-colors ${cols3 ? 'bg-white text-gray-700 shadow-sm font-medium' : 'text-gray-500 hover:text-gray-600'} ${fullscreen ? 'text-sm px-3 py-1' : 'text-[10px]'}`}
+              className={`px-2 py-1 rounded transition-colors text-[11px] ${cols3 ? 'bg-white text-gray-800 shadow-sm font-medium' : 'text-gray-400 hover:text-gray-200'}`}
             >
               3欄
             </button>
           </div>
-          {/* Fullscreen button */}
           <button
             onClick={toggleFullscreen}
-            className="px-2 py-1 rounded text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+            className="px-2 py-1 rounded text-xs bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors"
             title={fullscreen ? '退出全屏' : '全屏顯示'}
           >
             {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </button>
         </div>
       </div>
-      {/* Grid — fullscreen uses larger font/spacing */}
+
+      {/* Grid columns */}
       <div
         className="grid"
         style={{
-          height: fullscreen ? 'calc(100vh - 48px)' : 'auto',
+          height: fullscreen ? 'calc(100vh - 56px)' : 'auto',
           gridTemplateColumns: groups.cols === 3 ? 'repeat(3, 1fr)' : 'repeat(2, 1fr)',
-          ...(fullscreen ? { fontSize: '1.1rem' } : {}),
+          ...(fullscreen ? { fontSize: '1.05rem' } : {}),
         }}
       >
-        {renderColumn(groups.g1, `1️⃣ A-I`, '#3b82f6', '#3b82f6')}
-        {renderColumn(groups.g2, `2️⃣ ${cols3 ? 'J-Q' : 'J-Z'}`, '#f59e0b', '#f59e0b')}
-        {groups.cols === 3 && renderColumn(groups.g3, `3️⃣ R-Z`, '#06b6d4', '#06b6d4')}
+        {renderColumn(groups.g1, `1️⃣ A - I`, '#3b82f6')}
+        {renderColumn(groups.g2, `2️⃣ ${cols3 ? 'J - Q' : 'J - Z'}`, '#f59e0b')}
+        {groups.cols === 3 && renderColumn(groups.g3, `3️⃣ R - Z`, '#06b6d4')}
       </div>
+
+      {/* Slide-in keyframes (injected once) */}
+      <style>{`
+        @keyframes slideIn {
+          from { opacity: 0; transform: translateX(-16px); }
+          to   { opacity: 1; transform: translateX(0); }
+        }
+      `}</style>
     </div>
   );
 
-  // When fullscreen, render outside the normal flow at the document level
-  if (fullscreen) {
-    return boardContent;
-  }
-
-  // Normal inline rendering
   return boardContent;
 }
