@@ -6,6 +6,7 @@ import {
   Users,
   CalendarCheck,
   RefreshCw,
+  Package,
   BookOpen,
   Settings,
   LogOut,
@@ -23,6 +24,7 @@ const navItems = [
   { path: '/students', label: '學生', icon: Users },
   { path: '/attendance', label: '每日簽到', icon: CalendarCheck },
   { path: '/makeups', label: '補課', icon: RefreshCw },
+  { path: '/products', label: '貨品', icon: Package },
 ];
 
 export default function Layout({ children }: { children: React.ReactNode }) {

@@ -11,6 +11,7 @@ import Classes from './pages/Classes';
 import ClassDetail from './pages/ClassDetail';
 import Attendance from './pages/Attendance';
 import Makeups from './pages/Makeups';
+import Products from './pages/Products';
 import SettingsAccounts from './pages/SettingsAccounts';
 
 const queryClient = new QueryClient({
@@ -92,6 +93,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <Makeups />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/products"
+              element={
+                <ProtectedRoute>
+                  <Products />
                 </ProtectedRoute>
               }
             />

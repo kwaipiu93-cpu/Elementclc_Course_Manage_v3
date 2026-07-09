@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
-import { Plus, ExternalLink, Phone, Mail, GraduationCap, School, Camera, Loader2, CheckSquare, X, Users } from 'lucide-react';
+import { Plus, Download, ExternalLink, Phone, Mail, GraduationCap, School, Camera, Loader2, CheckSquare, X, Users } from 'lucide-react';
 
 interface StudentForm {
   surname: string;
@@ -35,7 +35,8 @@ export default function Students() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<StudentForm>(emptyForm);
   const [search, setSearch] = useState('');
-  const [dseFilter, setDseFilter] = useState<string>('');
+  const [dseFilters, setDseFilters] = useState<Set<string>>(new Set());
+  const [dseDropdownOpen, setDseDropdownOpen] = useState(false);
   const [highlightId, setHighlightId] = useState<number | null>(null);
 
   // ─── Multi-select state ──────────────────────────────────
@@ -151,7 +152,7 @@ export default function Students() {
 
   const fullName = (s: any) => `${s.surname} ${s.given_name}`;
   const filteredStudents = (students || []).filter((s: any) => {
-    if (dseFilter && String(s.dse_year) !== dseFilter) return false;
+    if (dseFilters.size > 0 && !dseFilters.has(String(s.dse_year))) return false;
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
     return fullName(s).toLowerCase().includes(q)
@@ -177,6 +178,25 @@ export default function Students() {
   };
 
   const clearSelection = () => setSelectedIds(new Set());
+
+  /* ── 導出 CSV ────────────────────────────────────────────── */
+  const exportCSV = useCallback(() => {
+    const list = filteredStudents.length > 0 ? filteredStudents : (students || []);
+    if (list.length === 0) return;
+    const headers = ['姓氏', '名字', '學校', '電郵', '電話', '家長電話', 'DSE年份', '報名日期', '備註'];
+    const rows = list.map((s: any) => [
+      s.surname || '', s.given_name || '', s.school || '', s.email || '',
+      s.phone || '', s.parent_phone || '', s.dse_year || '', s.enroll_date || '', s.note || '',
+    ]);
+    const csv = [headers.join(','), ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }); // BOM for Excel compat
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `students_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [students, filteredStudents]);
 
   // ─── Batch enroll ─────────────────────────────────────────
   const openEnrollModal = () => {
@@ -268,9 +288,15 @@ export default function Students() {
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">👤 學生</h1>
-        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors shadow-sm">
-          <Plus size={18} /> 新增學生
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={exportCSV} disabled={!students?.length}
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-600 rounded-xl hover:bg-gray-50 transition-colors disabled:opacity-40 text-sm">
+            <Download size={16} /> 導出
+          </button>
+          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors shadow-sm">
+            <Plus size={18} /> 新增學生
+          </button>
+        </div>
       </div>
 
       {/* Search bar + DSE filter */}
@@ -288,29 +314,67 @@ export default function Students() {
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">{filteredStudents.length} 項</span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="relative flex items-center gap-2">
           <GraduationCap size={16} className="text-gray-400" />
-          <select
-            value={dseFilter}
-            onChange={e => { setDseFilter(e.target.value); setSelectedIds(new Set()); }}
-            className="px-3 py-2.5 border border-gray-300 rounded-xl text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[120px]"
-          >
-            <option value="">全部 DSE 年份</option>
-            {(() => {
-              const years = new Set((students || []).map((s: any) => s.dse_year).filter(Boolean));
-              return [...years].sort().map(y => (
-                <option key={y} value={y}>{y} DSE</option>
-              ));
-            })()}
-          </select>
-          {dseFilter && (
+          <div className="relative">
             <button
-              onClick={() => setDseFilter('')}
-              className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1"
+              onClick={() => setDseDropdownOpen(!dseDropdownOpen)}
+              onBlur={() => setTimeout(() => setDseDropdownOpen(false), 200)}
+              className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-sm bg-white outline-none cursor-pointer min-w-[140px] transition-colors ${
+                dseFilters.size > 0
+                  ? 'border-blue-400 text-blue-700 ring-1 ring-blue-300'
+                  : 'border-gray-300 text-gray-600'
+              }`}
             >
-              清除
+              <GraduationCap size={15} className={dseFilters.size > 0 ? 'text-blue-500' : 'text-gray-400'} />
+              <span className="flex-1 text-left">
+                {dseFilters.size === 0 ? '全部 DSE 年份' : `DSE (${dseFilters.size})`}
+              </span>
+              <span className={`text-xs transition-transform ${dseDropdownOpen ? 'rotate-180' : ''}`}>▼</span>
             </button>
-          )}
+            {dseDropdownOpen && (
+              <div className="absolute top-full left-0 mt-1 w-48 bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-1 max-h-60 overflow-y-auto">
+                {dseFilters.size > 0 && (
+                  <button
+                    onClick={() => { setDseFilters(new Set()); setDseDropdownOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
+                  >
+                    <X size={12} /> 清除篩選
+                  </button>
+                )}
+                {(() => {
+                  const years = new Set((students || []).map((s: any) => s.dse_year).filter(Boolean));
+                  return [...years].sort().map(y => {
+                    const val = String(y);
+                    const checked = dseFilters.has(val);
+                    return (
+                      <label
+                        key={val}
+                        className={`flex items-center gap-2 px-3 py-2 text-sm cursor-pointer transition-colors ${
+                          checked ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setDseFilters(prev => {
+                              const next = new Set(prev);
+                              if (next.has(val)) next.delete(val); else next.add(val);
+                              return next;
+                            });
+                            setSelectedIds(new Set());
+                          }}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        {val} DSE
+                      </label>
+                    );
+                  });
+                })()}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

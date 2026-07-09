@@ -320,3 +320,64 @@ pub struct LessonStandby {
     pub is_deleted: bool,
     pub created_at: Option<String>,
 }
+
+// ─── Product ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct Product {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub price: f64,
+    pub is_archived: bool,
+    pub is_deleted: bool,
+    pub updated_at: Option<String>,
+    pub updated_by: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateProduct {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub price: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProduct {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub price: Option<f64>,
+    pub is_archived: Option<bool>,
+}
+
+// ─── Product Purchase ────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct ProductPurchase {
+    pub id: i64,
+    pub student_id: i64,
+    pub product_id: i64,
+    pub quantity: i32,
+    pub total_price: f64,
+    pub pay_status: String,
+    pub note: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub updated_by: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateProductPurchase {
+    pub student_id: i64,
+    pub product_id: i64,
+    pub quantity: Option<i32>,
+    pub total_price: f64,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProductPurchase {
+    pub pay_status: Option<String>,
+    pub note: Option<String>,
+}

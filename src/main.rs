@@ -197,6 +197,16 @@ fn api_routes() -> Router<AppState> {
         .route("/users/{id}", get(handlers::users::get))
         .route("/users/{id}", put(handlers::users::update))
         .route("/users/{id}", delete(handlers::users::delete))
+        // Product routes
+        .route("/products", get(handlers::products::list_products))
+        .route("/products", post(handlers::products::create_product))
+        .route("/products/{id}", put(handlers::products::update_product))
+        .route("/products/{id}", delete(handlers::products::delete_product))
+        // Product purchase routes
+        .route("/students/{id}/purchases", get(handlers::products::list_purchases_by_student))
+        .route("/purchases", post(handlers::products::create_purchase))
+        .route("/purchases/{id}", put(handlers::products::update_purchase))
+        .route("/purchases/{id}", delete(handlers::products::delete_purchase))
 }
 
 #[derive(Clone)]

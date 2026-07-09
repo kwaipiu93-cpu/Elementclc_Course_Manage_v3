@@ -454,29 +454,28 @@ export default function Attendance() {
                             </button>
                           </span>
                         ) : (
-                          <>
-                            <button
-                              onClick={() => {
-                                setScanningLessonId(lesson.lessonId);
-                                startScan.mutate(lesson.lessonId);
-                              }}
-                              disabled={startScan.isPending || !!scanningLessonId}
-                              className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 disabled:opacity-50"
-                            >
-                              📷 掃碼
-                            </button>
-                            <button
-                              onClick={() => toggleLessonBoard(lesson.lessonId)}
-                              className={`px-2 py-0.5 rounded text-xs transition-colors ${
-                                lessonBoardIds.has(lesson.lessonId)
-                                  ? 'bg-amber-100 text-amber-700 font-medium'
-                                  : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                              }`}
-                            >
-                              📋 看板
-                            </button>
-                          </>
+                          <button
+                            onClick={() => {
+                              setScanningLessonId(lesson.lessonId);
+                              startScan.mutate(lesson.lessonId);
+                            }}
+                            disabled={startScan.isPending || !!scanningLessonId}
+                            className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 disabled:opacity-50"
+                          >
+                            📷 掃碼
+                          </button>
                         )}
+                        {/* 看板按鈕 — 無論是否掃碼中都可獨立切換 */}
+                        <button
+                          onClick={() => toggleLessonBoard(lesson.lessonId)}
+                          className={`px-2 py-0.5 rounded text-xs transition-colors ${
+                            lessonBoardIds.has(lesson.lessonId)
+                              ? 'bg-amber-100 text-amber-700 font-medium'
+                              : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                          }`}
+                        >
+                          📋 看板
+                        </button>
                         <span className="text-xs text-gray-400">
                           ✅{stats.present} 📋{stats.leave} ❌{stats.absent} ⌛️{stats.pending} ‼️{stats.waiting} / {stats.total}人
                         </span>

@@ -1,7 +1,7 @@
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft, Plus, ShoppingCart } from 'lucide-react';
 import { useState } from 'react';
 
 // ─── Cell label helpers (same legend as ClassDetail) ────────────────────
@@ -354,6 +354,13 @@ export default function StudentDetail() {
         </div>
       )}
 
+      {/* ─── Product Purchases ───────────────────────────────── */}
+      <h2 className="font-bold text-lg mb-3 mt-8">
+        🛒 貨品購買 <span className="text-gray-400 text-sm font-normal">(耳機、手續費等)</span>
+      </h2>
+
+      <PurchaseSection studentId={studentId} studentName={fullName} />
+
       {/* Legend */}
       <div className="text-[10px] text-gray-400 flex flex-wrap gap-x-4 gap-y-1 mt-2 px-1">
         <span>✅課堂教學出席</span>
@@ -369,6 +376,176 @@ export default function StudentDetail() {
         <span>🟡未處理</span>
         <span>🔒未完成</span>
       </div>
+    </div>
+  );
+}
+
+/* ─── Purchase Section Component ──────────────────────────── */
+
+function PurchaseSection({ studentId, studentName }: { studentId: number; studentName: string }) {
+  const queryClient = useQueryClient();
+
+  const { data: purchaseData, isLoading } = useQuery({
+    queryKey: ['student-purchases', studentId],
+    queryFn: () => api.getStudentPurchases(studentId),
+  });
+
+  const products: any[] = purchaseData?.products || [];
+  const purchases: any[] = purchaseData?.purchases || [];
+  const activeProducts = products.filter((p: any) => !p.is_archived);
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [selProduct, setSelProduct] = useState('');
+  const [selQty, setSelQty] = useState('1');
+  const [selNote, setSelNote] = useState('');
+
+  const buyMutation = useMutation({
+    mutationFn: (data: any) => api.createPurchase(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['student-purchases', studentId] });
+      setShowAdd(false);
+      setSelProduct('');
+      setSelQty('1');
+      setSelNote('');
+    },
+    onError: (err: Error) => alert('購買記錄失敗：' + err.message),
+  });
+
+  const togglePaidMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) =>
+      api.updatePurchase(id, { pay_status: status }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['student-purchases', studentId] }),
+  });
+
+  const deletePurchaseMutation = useMutation({
+    mutationFn: (id: number) => api.deletePurchase(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['student-purchases', studentId] }),
+  });
+
+  const productMap = new Map(products.map((p: any) => [p.id, p]));
+
+  return (
+    <div className="mb-4">
+      {/* Purchase list */}
+      {isLoading ? (
+        <div className="text-gray-400 py-4 text-center text-sm">載入中...</div>
+      ) : purchases.length === 0 && !showAdd ? (
+        <div className="bg-white rounded-xl shadow-sm p-4 text-center text-gray-400 text-sm mb-3">
+          暫無購買記錄
+        </div>
+      ) : (
+        <div className="space-y-2 mb-3">
+          {purchases.map((pp: any) => {
+            const prod = productMap.get(pp.product_id);
+            return (
+              <div key={pp.id} className="bg-white rounded-xl shadow-sm p-3 flex items-center justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{prod?.name || `#${pp.product_id}`}</span>
+                    <span className="text-xs text-gray-400">×{pp.quantity}</span>
+                    <span className="text-sm font-bold text-blue-600">${pp.total_price}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                      pp.pay_status === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {pp.pay_status === 'Paid' ? '已繳' : '未繳'}
+                    </span>
+                  </div>
+                  {pp.note && <div className="text-xs text-gray-400 mt-0.5">{pp.note}</div>}
+                  {pp.created_at && <div className="text-xs text-gray-400">{pp.created_at}</div>}
+                </div>
+                <div className="flex items-center gap-1 shrink-0 ml-2">
+                  <button
+                    onClick={() => togglePaidMutation.mutate({ id: pp.id, status: pp.pay_status === 'Paid' ? 'Unpaid' : 'Paid' })}
+                    className={`px-2 py-1 text-xs rounded-lg transition-colors ${
+                      pp.pay_status === 'Paid'
+                        ? 'text-gray-400 hover:bg-gray-100'
+                        : 'bg-green-600 text-white hover:bg-green-700'
+                    }`}
+                  >
+                    {pp.pay_status === 'Paid' ? '↩' : '已繳'}
+                  </button>
+                  <button
+                    onClick={() => { if (confirm('刪除此購買記錄？')) deletePurchaseMutation.mutate(pp.id); }}
+                    className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-lg"
+                  >
+                    刪除
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Add purchase form */}
+      {showAdd ? (
+        <div className="bg-white rounded-xl shadow-sm p-4">
+          <h3 className="text-sm font-bold mb-3">購買貨品 — {studentName}</h3>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">貨品</label>
+              <select value={selProduct} onChange={(e) => setSelProduct(e.target.value)}
+                className="w-full border rounded-lg px-3 py-1.5 text-sm">
+                <option value="">-- 選擇貨品 --</option>
+                {activeProducts.map((p: any) => (
+                  <option key={p.id} value={p.id}>{p.name} (${p.price})</option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">數量</label>
+                <input type="number" min="1" value={selQty}
+                  onChange={(e) => setSelQty(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-1.5 text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">金額</label>
+                <div className="text-sm font-bold py-1.5 text-blue-600">
+                  ${selProduct ? (parseFloat(selQty || '1') * (activeProducts.find((p: any) => String(p.id) === selProduct)?.price || 0)).toFixed(1) : '0'}
+                </div>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">備註</label>
+              <input type="text" value={selNote}
+                onChange={(e) => setSelNote(e.target.value)}
+                className="w-full border rounded-lg px-3 py-1.5 text-sm"
+                placeholder="optional" />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  const pid = parseInt(selProduct);
+                  const qty = parseInt(selQty) || 1;
+                  const prod = activeProducts.find((p: any) => p.id === pid);
+                  if (!prod) return;
+                  buyMutation.mutate({
+                    student_id: studentId,
+                    product_id: pid,
+                    quantity: qty,
+                    total_price: qty * prod.price,
+                    note: selNote || undefined,
+                  });
+                }}
+                disabled={!selProduct || buyMutation.isPending}
+                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {buyMutation.isPending ? '處理中...' : '記錄購買'}
+              </button>
+              <button onClick={() => setShowAdd(false)}
+                className="px-4 py-1.5 text-sm border rounded-lg hover:bg-gray-50">
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setShowAdd(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
+          <ShoppingCart size={14} /> 記錄購買
+        </button>
+      )}
     </div>
   );
 }

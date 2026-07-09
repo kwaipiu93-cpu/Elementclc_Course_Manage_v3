@@ -294,5 +294,40 @@ pub async fn run_migrations(pool: &SqlitePool) -> color_eyre::Result<()> {
         .await
         .ok();
 
+    // Migration: products table (貨品)
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS products (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            price       REAL NOT NULL DEFAULT 0,
+            is_archived INTEGER NOT NULL DEFAULT 0,
+            is_deleted  INTEGER NOT NULL DEFAULT 0,
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_by  INTEGER
+        )"#
+    )
+    .execute(pool)
+    .await?;
+
+    // Migration: product_purchases table (學生購買記錄)
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS product_purchases (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id  INTEGER NOT NULL REFERENCES students(id),
+            product_id  INTEGER NOT NULL REFERENCES products(id),
+            quantity    INTEGER NOT NULL DEFAULT 1,
+            total_price REAL NOT NULL DEFAULT 0,
+            pay_status  TEXT NOT NULL DEFAULT 'Unpaid',
+            note        TEXT DEFAULT '',
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_by  INTEGER
+        )"#
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
+
 }

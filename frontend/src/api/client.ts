@@ -25,7 +25,7 @@ async function request<T>(
   const data = await res.json();
 
   if (!data.ok) {
-    throw new Error(data.error || 'Request failed');
+    throw new Error(data.error || data.message || 'Request failed');
   }
 
   return data.data ?? data;
@@ -257,4 +257,23 @@ export const api = {
     if (!data.ok) throw new Error(data.message || '上傳失敗');
     return data.data;
   },
+
+  // Products
+  listProducts: () => request<any[]>('/products'),
+  createProduct: (data: { name: string; description?: string; price: number }) =>
+    request<any>('/products', { method: 'POST', body: JSON.stringify(data) }),
+  updateProduct: (id: number, data: any) =>
+    request<any>(`/products/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteProduct: (id: number) =>
+    request<any>(`/products/${id}`, { method: 'DELETE' }),
+
+  // Product purchases
+  getStudentPurchases: (studentId: number) =>
+    request<{ purchases: any[]; products: any[] }>(`/students/${studentId}/purchases`),
+  createPurchase: (data: { student_id: number; product_id: number; quantity?: number; total_price: number; note?: string }) =>
+    request<any>('/purchases', { method: 'POST', body: JSON.stringify(data) }),
+  updatePurchase: (id: number, data: { pay_status?: string; note?: string }) =>
+    request<any>(`/purchases/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deletePurchase: (id: number) =>
+    request<any>(`/purchases/${id}`, { method: 'DELETE' }),
 };
