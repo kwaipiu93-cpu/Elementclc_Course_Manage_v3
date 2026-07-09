@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { Calendar as CalendarIcon, List, Loader2, X } from 'lucide-react';
+import { Calendar as CalendarIcon, List, Loader2, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import ScanPanel from '../components/ScanPanel';
 import LessonBoard from '../components/LessonBoard';
 
@@ -59,7 +59,17 @@ const RECORDING_ACTIONS = [
 export default function Attendance() {
   const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD（local timezone）
   const [selectedDate, setSelectedDate] = useState(today);
-  const [calView, setCalView] = useState(false);
+  const [calMode, setCalMode] = useState<'list' | 'week' | 'month'>('list');
+  const [calWeekStart, setCalWeekStart] = useState(() => {
+    // Monday of current week
+    const now = new Date();
+    const dow = now.getDay();
+    const diff = dow === 0 ? -6 : 1 - dow;
+    const mon = new Date(now);
+    mon.setDate(mon.getDate() + diff);
+    mon.setHours(0, 0, 0, 0);
+    return mon;
+  });
   const [lessonBoardIds, setLessonBoardIds] = useState<Set<number>>(new Set());
 
   const toggleLessonBoard = (lessonId: number) => {
@@ -96,20 +106,36 @@ export default function Attendance() {
   const { data: classGroups, isLoading, isError } = useQuery({
     queryKey: ['attendance-daily', selectedDate],
     queryFn: () => api.getAttendanceDaily(selectedDate),
-    enabled: !calView,
+    enabled: calMode === 'list',
     refetchInterval: scanningLessonId ? 3000 : false,
   });
 
-  // Calendar
-  const calYear = new Date().getFullYear();
-  const calMonth = new Date().getMonth() + 1;
+  // Calendar — fetch months that the current view covers
+  const calYear = calWeekStart.getFullYear();
+  const calMonth = calWeekStart.getMonth() + 1;
   const calMonthName = ['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'][calMonth - 1];
+
+  // For week view, also fetch next month if the week spans across
+  const weekEnd = new Date(calWeekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  const nextMonth = weekEnd.getMonth() !== calWeekStart.getMonth() ? weekEnd.getMonth() + 1 : 0;
 
   const { data: calApiData } = useQuery({
     queryKey: ['calendar', calYear, calMonth],
     queryFn: () => api.getAttendanceCalendar(calYear, calMonth),
-    enabled: calView,
+    enabled: calMode !== 'list',
   });
+
+  const { data: calApiDataNext } = useQuery({
+    queryKey: ['calendar', calYear, nextMonth],
+    queryFn: () => api.getAttendanceCalendar(calYear, nextMonth),
+    enabled: calMode === 'week' && nextMonth > 0,
+  });
+
+  // Merged calendar data
+  const mergedCalData = (calMode === 'week' && calApiDataNext)
+    ? { ...(calApiData as any || {}), ...(calApiDataNext as any || {}) }
+    : (calApiData as any || {});
 
   // Mutations
   const updateStatus = useMutation({
@@ -260,12 +286,12 @@ export default function Attendance() {
   // Calendar
   const goToDate = (dateStr: string) => {
     setSelectedDate(dateStr);
-    setCalView(false);
+    setCalMode('list');
   };
 
   const goToday = () => {
     setSelectedDate(today);
-    setCalView(false);
+    setCalMode('list');
   };
 
   const calDays = () => {
@@ -324,22 +350,115 @@ export default function Attendance() {
         </span>
         <div className="flex gap-1 ml-auto">
           <button
-            onClick={() => setCalView(false)}
-            className={`px-3 py-1.5 text-sm rounded-lg ${!calView ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            onClick={() => setCalMode('list')}
+            className={`px-3 py-1.5 text-sm rounded-lg ${calMode === 'list' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
             <List size={16} className="inline mr-1" />列表
           </button>
           <button
-            onClick={() => setCalView(!calView)}
-            className={`px-3 py-1.5 text-sm rounded-lg ${calView ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            onClick={() => setCalMode('week')}
+            className={`px-3 py-1.5 text-sm rounded-lg ${calMode === 'week' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
-            <CalendarIcon size={16} className="inline mr-1" />日曆
+            <CalendarIcon size={16} className="inline mr-1" />週
+          </button>
+          <button
+            onClick={() => setCalMode('month')}
+            className={`px-3 py-1.5 text-sm rounded-lg ${calMode === 'month' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          >
+            <CalendarIcon size={16} className="inline mr-1" />月
           </button>
         </div>
       </div>
 
-      {/* Calendar */}
-      {calView && (
+      {/* ═══ Calendar: Week View ═══ */}
+      {calMode === 'week' && (
+        <div className="bg-white rounded-xl shadow-sm p-4 mb-4">
+          {/* Week nav */}
+          <div className="flex items-center justify-between mb-4">
+            <button
+              onClick={() => {
+                const prev = new Date(calWeekStart);
+                prev.setDate(prev.getDate() - 7);
+                setCalWeekStart(prev);
+              }}
+              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <strong className="text-base text-gray-700">
+              {(() => {
+                const end = new Date(calWeekStart);
+                end.setDate(end.getDate() + 6);
+                const fmt = (d: Date) => `${d.getMonth() + 1}/${d.getDate()}`;
+                return `${fmt(calWeekStart)} — ${fmt(end)}`;
+              })()}
+            </strong>
+            <button
+              onClick={() => {
+                const next = new Date(calWeekStart);
+                next.setDate(next.getDate() + 7);
+                setCalWeekStart(next);
+              }}
+              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"
+            >
+              <ChevronRight size={20} />
+            </button>
+          </div>
+
+          {/* 7-day columns */}
+          <div className="grid grid-cols-7 gap-1">
+            {(() => {
+              const days = ['日','一','二','三','四','五','六'];
+              const cols: { label: string; dateStr: string; dayNum: number; data: any; isToday: boolean }[] = [];
+              const todayStr = new Date().toLocaleDateString('en-CA');
+              for (let i = 0; i < 7; i++) {
+                const d = new Date(calWeekStart);
+                d.setDate(d.getDate() + i);
+                const dateStr = d.toLocaleDateString('en-CA');
+                const dow = d.getDay();
+                cols.push({
+                  label: days[dow],
+                  dateStr,
+                  dayNum: d.getDate(),
+                  data: mergedCalData[dateStr] || null,
+                  isToday: dateStr === todayStr,
+                });
+              }
+              return cols.map(col => (
+                <div
+                  key={col.dateStr}
+                  onClick={() => goToDate(col.dateStr)}
+                  className={`cursor-pointer rounded-lg p-2 text-center border transition-colors hover:border-blue-300 ${
+                    col.isToday ? 'border-blue-400 bg-blue-50 ring-1 ring-blue-300' :
+                    col.data ? 'border-gray-200 bg-green-50' :
+                    'border-gray-100 bg-gray-50'
+                  }`}
+                  style={{ minHeight: 100 }}
+                >
+                  <div className="text-[11px] text-gray-400 font-medium mb-1">{col.label}</div>
+                  <div className={`text-lg font-bold mb-1 ${col.isToday ? 'text-blue-600' : 'text-gray-700'}`}>
+                    {col.dayNum}
+                  </div>
+                  {col.data ? (
+                    <div className="text-[10px] leading-tight space-y-0.5">
+                      <div className="text-gray-600">📚 {col.data.lessons}節</div>
+                      {col.data.present > 0 && <div className="text-green-700">✅ {col.data.present}</div>}
+                      {col.data.leave > 0 && <div className="text-blue-700">📋 {col.data.leave}</div>}
+                      {col.data.absent > 0 && <div className="text-red-700">❌ {col.data.absent}</div>}
+                      {col.data.unchecked > 0 && <div className="text-yellow-600">🟡 {col.data.unchecked}</div>}
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-gray-300 mt-1">—</div>
+                  )}
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ Calendar: Month View ═══ */}
+      {calMode === 'month' && (
         <div className="bg-white rounded-xl shadow-sm p-4 mb-4">
           <div className="flex items-center justify-between mb-3">
             <strong className="text-lg">{calYear}年 {calMonthName}</strong>
@@ -386,9 +505,9 @@ export default function Attendance() {
         </div>
       )}
 
-      {/* Board view — 全班分組展示 (A-I, J-Q, R-Z) — now per-lesson */}
+      {/* ═══ List view — 全班分組展示 ═══ */}
 
-      {!calView && (
+      {calMode === 'list' && (
         <div className="space-y-6">
           {isLoading && (
             <div className="flex items-center justify-center py-12">
