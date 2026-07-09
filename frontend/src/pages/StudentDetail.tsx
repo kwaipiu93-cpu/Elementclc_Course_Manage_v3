@@ -437,40 +437,37 @@ function PurchaseSection({ studentId, studentName }: { studentId: number; studen
         <div className="space-y-2 mb-3">
           {purchases.map((pp: any) => {
             const prod = productMap.get(pp.product_id);
+            const isPaid = pp.pay_status === 'Paid';
             return (
               <div key={pp.id} className="bg-white rounded-xl shadow-sm p-3 flex items-center justify-between">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-medium">{prod?.name || `#${pp.product_id}`}</span>
                     <span className="text-xs text-gray-400">×{pp.quantity}</span>
                     <span className="text-sm font-bold text-blue-600">${pp.total_price}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                      pp.pay_status === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
-                    }`}>
-                      {pp.pay_status === 'Paid' ? '已繳' : '未繳'}
-                    </span>
+                    {/* Clickable pay status pill */}
+                    <button
+                      onClick={() => togglePaidMutation.mutate({ id: pp.id, status: isPaid ? 'Unpaid' : 'Paid' })}
+                      disabled={togglePaidMutation.isPending}
+                      className={`px-2 py-0.5 rounded-full text-xs font-bold border-2 cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+                        isPaid
+                          ? 'bg-green-50 text-green-700 border-green-300 hover:bg-green-100'
+                          : 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
+                      }`}
+                      title={isPaid ? 'Click 標記為未繳' : 'Click 標記為已繳'}
+                    >
+                      {isPaid ? '💰 已繳 ✓' : '💰 未繳 ✗'}
+                    </button>
                   </div>
                   {pp.note && <div className="text-xs text-gray-400 mt-0.5">{pp.note}</div>}
                   {pp.created_at && <div className="text-xs text-gray-400">{pp.created_at}</div>}
                 </div>
-                <div className="flex items-center gap-1 shrink-0 ml-2">
-                  <button
-                    onClick={() => togglePaidMutation.mutate({ id: pp.id, status: pp.pay_status === 'Paid' ? 'Unpaid' : 'Paid' })}
-                    className={`px-2 py-1 text-xs rounded-lg transition-colors ${
-                      pp.pay_status === 'Paid'
-                        ? 'text-gray-400 hover:bg-gray-100'
-                        : 'bg-green-600 text-white hover:bg-green-700'
-                    }`}
-                  >
-                    {pp.pay_status === 'Paid' ? '↩' : '已繳'}
-                  </button>
-                  <button
-                    onClick={() => { if (confirm('刪除此購買記錄？')) deletePurchaseMutation.mutate(pp.id); }}
-                    className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-lg"
-                  >
-                    刪除
-                  </button>
-                </div>
+                <button
+                  onClick={() => { if (confirm('刪除此購買記錄？')) deletePurchaseMutation.mutate(pp.id); }}
+                  className="px-2 py-1 text-xs text-red-500 hover:bg-red-50 rounded-lg shrink-0 ml-2"
+                >
+                  刪除
+                </button>
               </div>
             );
           })}
