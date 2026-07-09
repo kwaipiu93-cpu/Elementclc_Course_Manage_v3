@@ -105,16 +105,22 @@ export default function Products() {
                   <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
                     <button onClick={() => openEdit(p)}
                       className="flex-1 text-center py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-                      <Pencil size={14} className="inline mr-1" />編輯
+                      <Pencil size={14} className="inline mr-1" />{p.is_system ? '費用' : '編輯'}
                     </button>
-                    <button onClick={() => handleArchiveToggle(p)}
-                      className="flex-1 text-center py-1.5 text-xs font-medium text-amber-600 hover:bg-amber-50 rounded-lg transition-colors">
-                      <Archive size={14} className="inline mr-1" />封存
-                    </button>
-                    <button onClick={() => { if (confirm(`確認刪除「${p.name}」？`)) deleteMutation.mutate(p.id); }}
-                      className="flex-1 text-center py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                      <Trash2 size={14} className="inline mr-1" />刪除
-                    </button>
+                    {!p.is_system && (
+                      <button onClick={() => handleArchiveToggle(p)}
+                        className="flex-1 text-center py-1.5 text-xs font-medium text-amber-600 hover:bg-amber-50 rounded-lg transition-colors">
+                        <Archive size={14} className="inline mr-1" />封存
+                      </button>
+                    )}
+                    {!p.is_system ? (
+                      <button onClick={() => { if (confirm(`確認刪除「${p.name}」？`)) deleteMutation.mutate(p.id); }}
+                        className="flex-1 text-center py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                        <Trash2 size={14} className="inline mr-1" />刪除
+                      </button>
+                    ) : (
+                      <span className="flex-1 text-center py-1.5 text-xs text-gray-300">🔒 系統</span>
+                    )}
                   </div>
                 </div>
               ))}

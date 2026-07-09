@@ -72,6 +72,21 @@ pub async fn delete_product(
     Path(id): Path<i64>,
 ) -> AppResultJson {
     auth::get_current_user_id(&headers)?;
+
+    // Reject deletion of system products
+    let product: Option<Product> = sqlx::query_as(
+        "SELECT * FROM products WHERE id = ? AND is_deleted = 0"
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if let Some(p) = product {
+        if p.is_system {
+            return Ok(Json(json!({"ok": false, "error": "系統貨品不能刪除，只能更改費用"})));
+        }
+    }
+
     sqlx::query("UPDATE products SET is_deleted = 1 WHERE id = ?")
         .bind(id).execute(&state.db).await?;
     Ok(Json(json!({"ok": true})))

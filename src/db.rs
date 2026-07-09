@@ -302,6 +302,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> color_eyre::Result<()> {
             description TEXT DEFAULT '',
             price       REAL NOT NULL DEFAULT 0,
             is_archived INTEGER NOT NULL DEFAULT 0,
+            is_system   INTEGER NOT NULL DEFAULT 0,
             is_deleted  INTEGER NOT NULL DEFAULT 0,
             updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
             updated_by  INTEGER
@@ -309,6 +310,17 @@ pub async fn run_migrations(pool: &SqlitePool) -> color_eyre::Result<()> {
     )
     .execute(pool)
     .await?;
+
+    // Migration: add is_system column to existing products (idempotent)
+    let _ = sqlx::query("ALTER TABLE products ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+
+    // Seed system product: Video補課手續費 (idempotent — only inserts if not exists)
+    let _ = sqlx::query(
+        "INSERT OR IGNORE INTO products (id, name, description, price, is_system, updated_by) VALUES (3, 'Video補課手續費', '申請影片錄播補課的行政手續費', 50.0, 1, 1)"
+    )
+    .execute(pool)
+    .await;
 
     // Migration: product_purchases table (學生購買記錄)
     sqlx::query(

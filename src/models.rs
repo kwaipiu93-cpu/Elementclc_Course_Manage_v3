@@ -330,6 +330,7 @@ pub struct Product {
     pub description: Option<String>,
     pub price: f64,
     pub is_archived: bool,
+    pub is_system: bool,
     pub is_deleted: bool,
     pub updated_at: Option<String>,
     pub updated_by: Option<i64>,

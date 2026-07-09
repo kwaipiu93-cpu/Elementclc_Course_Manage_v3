@@ -91,6 +91,8 @@ export default function Attendance() {
     existingStatus: string;
   } | null>(null);
 
+  const [includeFee, setIncludeFee] = useState(true);
+
   const [scanningLessonId, setScanningLessonId] = useState<number | null>(null);
 
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -259,13 +261,27 @@ export default function Attendance() {
     });
   };
 
-  const handleQuickRecording = (makeupType: string) => {
+  const handleQuickRecording = async (makeupType: string) => {
     if (!actionTarget) return;
-    createRecordingMakeup.mutate({
-      lessonId: actionTarget.lessonId,
-      studentId: actionTarget.studentId,
-      makeupType,
-    });
+    try {
+      await createRecordingMakeup.mutateAsync({
+        lessonId: actionTarget.lessonId,
+        studentId: actionTarget.studentId,
+        makeupType,
+      });
+      // Auto-create purchase for recording handling fee
+      if (includeFee) {
+        await api.createPurchase({
+          student_id: actionTarget.studentId,
+          product_id: 3, // Video補課手續費
+          quantity: 1,
+          total_price: 0, // backend uses product price if 0
+          note: `${makeupType} — ${actionTarget.className} 第${actionTarget.lessonNum}節`,
+        });
+      }
+    } catch (err) {
+      // Error handled by mutation onError
+    }
   };
 
   // Calendar
@@ -882,6 +898,17 @@ export default function Attendance() {
                   </button>
                 ))}
               </div>
+              {/* Handling fee checkbox */}
+              <label className="flex items-center gap-2 mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={includeFee}
+                  onChange={e => setIncludeFee(e.target.checked)}
+                  className="w-4 h-4 text-amber-600 rounded"
+                />
+                <span className="text-xs font-medium text-amber-800">💰 Video補課手續費 ($50)</span>
+                <span className="text-[10px] text-amber-500 ml-auto">購買記錄</span>
+              </label>
             </div>
 
             {isProcessing && (
