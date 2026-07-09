@@ -315,16 +315,17 @@ export default function Attendance() {
   };
 
   const statsForLesson = (lesson: Lesson) => {
-    let present = 0, leave = 0, absent = 0, pending = 0, waiting = 0;
+    let present = 0, leave = 0, absent = 0, pending = 0, waiting = 0, catchup = 0;
     for (const stu of lesson.students) {
       const st = stu.status;
       if (st === 'present' || st === 'makeup' || st === 'recording_room_present' || st === 'video_makeup') present++;
       else if (st === 'leave') leave++;
       else if (st === 'absent') absent++;
       else if (st === 'scheduled_room' || st === 'scheduled_video' || st === 'scheduled_classroom') pending++;
+      else if (st === 'catchup_required') catchup++;
       else if (st === 'waiting') waiting++;
     }
-    return { present, leave, absent, pending, waiting, total: lesson.students.length };
+    return { present, leave, absent, pending, waiting, catchup, total: lesson.students.length };
   };
 
   const isProcessing = updateStatus.isPending || createRecordingMakeup.isPending;
@@ -549,7 +550,7 @@ export default function Attendance() {
                           📋 看板
                         </button>
                         <span className="text-xs text-gray-400">
-                          ✅{stats.present} 📋{stats.leave} ❌{stats.absent} ⌛️{stats.pending} ‼️{stats.waiting} / {stats.total}人
+                          ✅{stats.present} 📋{stats.leave} ❌{stats.absent} 🎥{stats.catchup} ⌛️{stats.pending} ‼️{stats.waiting} / {stats.total}人
                         </span>
                       </div>
                     </div>
@@ -665,8 +666,8 @@ export default function Attendance() {
                                       const s = stu.status;
                                       if (stu.locked) {
                                         // Locked: has a status but can't be modified due to later lessons
-                                        if (s === 'present' || s === 'makeup' || s === 'recording_room_present' || s === 'video_makeup' || s === 'leave' || s === 'absent' || s === 'waiting' || s === 'scheduled_room' || s === 'scheduled_video' || s === 'scheduled_classroom') {
-                                          const badge: Record<string, { text: string; bg: string; fg: string }> = {
+                                        if (s === 'present' || s === 'makeup' || s === 'recording_room_present' || s === 'video_makeup' || s === 'leave' || s === 'absent' || s === 'waiting' || s === 'scheduled_room' || s === 'scheduled_video' || s === 'scheduled_classroom' || s === 'catchup_required') {
+                                        const badge: Record<string, { text: string; bg: string; fg: string }> = {
                                             'present': { text: '✅課堂教學出席', bg: 'bg-green-50', fg: 'text-green-700' },
                                             'leave': { text: '📋請假待安排', bg: 'bg-blue-50', fg: 'text-blue-700' },
                                             'absent': { text: '❌缺勤待安排', bg: 'bg-red-50', fg: 'text-red-700' },
@@ -677,7 +678,8 @@ export default function Attendance() {
                                             'scheduled_room': { text: '⌛️課室錄播待補', bg: 'bg-amber-50', fg: 'text-amber-700' },
                                             'scheduled_video': { text: '⌛️線上錄播待補', bg: 'bg-purple-50', fg: 'text-purple-700' },
                                             'scheduled_classroom': { text: '⌛️課堂教學待補', bg: 'bg-amber-50', fg: 'text-amber-700' },
-                                          };
+                                            'catchup_required': { text: '🎥需錄播補堂', bg: 'bg-indigo-50', fg: 'text-indigo-700' },
+                                        };
                                           const b = badge[s];
                                           return (
                                             <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${b.bg} ${b.fg} cursor-not-allowed`}>
@@ -687,8 +689,8 @@ export default function Attendance() {
                                         }
                                         return <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-400 cursor-not-allowed">🔒未處理</span>;
                                       }
-                                      if (s === 'present' || s === 'makeup' || s === 'recording_room_present' || s === 'video_makeup' || s === 'leave' || s === 'absent' || s === 'waiting' || s === 'scheduled_room' || s === 'scheduled_video' || s === 'scheduled_classroom') {
-                                        const badge: Record<string, { text: string; bg: string; fg: string }> = {
+                                      if (s === 'present' || s === 'makeup' || s === 'recording_room_present' || s === 'video_makeup' || s === 'leave' || s === 'absent' || s === 'waiting' || s === 'scheduled_room' || s === 'scheduled_video' || s === 'scheduled_classroom' || s === 'catchup_required') {
+                                      const badge: Record<string, { text: string; bg: string; fg: string }> = {
                                           'present': { text: '✅課堂教學出席', bg: 'bg-green-50', fg: 'text-green-700' },
                                           'leave': { text: '📋請假待安排', bg: 'bg-blue-50', fg: 'text-blue-700' },
                                           'absent': { text: '❌缺勤待安排', bg: 'bg-red-50', fg: 'text-red-700' },
@@ -699,7 +701,8 @@ export default function Attendance() {
                                           'scheduled_room': { text: '⌛️課室錄播待補', bg: 'bg-amber-50', fg: 'text-amber-700' },
                                           'scheduled_video': { text: '⌛️線上錄播待補', bg: 'bg-purple-50', fg: 'text-purple-700' },
                                           'scheduled_classroom': { text: '⌛️課堂教學待補', bg: 'bg-amber-50', fg: 'text-amber-700' },
-                                        };
+                                          'catchup_required': { text: '🎥需錄播補堂', bg: 'bg-indigo-50', fg: 'text-indigo-700' },
+                                      };
                                         const b = badge[s];
                                         return (
                                           <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${b.bg} ${b.fg}`}>
