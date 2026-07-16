@@ -557,13 +557,21 @@ export default function Attendance() {
 
                     {/* Scan info bar */}
                     {scanningLessonId === lesson.lessonId && (
-                      <div className="px-4 py-1.5 bg-green-50 border-b border-green-100 flex items-center gap-2 text-xs text-green-700">
-                        <span>📡 掃碼端請 POST →</span>
-                        <code className="bg-green-100 px-2 py-0.5 rounded text-green-800 font-mono select-all">
-                          {window.location.origin}/api/qr-checkin
-                        </code>
-                        <span className="text-green-500">{"{email}"}</span>
-                        <span className="ml-auto text-green-500">學生 QR 碼需包含 email</span>
+                      <div className="px-4 py-1.5 bg-green-50 border-b border-green-100 text-xs text-green-700 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span>📡 Web掃碼 →</span>
+                          <code className="bg-green-100 px-2 py-0.5 rounded text-green-800 font-mono select-all">
+                            {window.location.origin}/api/qr-checkin
+                          </code>
+                          <span className="text-green-500">{"{email}"} (JSON)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span>🔌 硬體掃描器 →</span>
+                          <code className="bg-green-100 px-2 py-0.5 rounded text-green-800 font-mono select-all">
+                            {window.location.origin}/api/scanner-checkin
+                          </code>
+                          <span className="text-green-500">vgdecoderesult=email (form)</span>
+                        </div>
                       </div>
                     )}
 
