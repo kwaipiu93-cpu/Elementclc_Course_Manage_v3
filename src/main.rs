@@ -177,6 +177,7 @@ fn api_routes() -> Router<AppState> {
         .route("/standby/confirm", post(handlers::attendance::confirm_standby))
         .route("/classes/{id}/standby-list", get(handlers::attendance::class_standby_students))
         .route("/qr-checkin", post(handlers::attendance::qr_checkin))
+        .route("/scanner-checkin", post(handlers::attendance::scanner_checkin))
         .route("/scan/start", post(handlers::attendance::scan_start))
         .route("/scan/stop", post(handlers::attendance::scan_stop))
         .route("/scan/active", get(handlers::attendance::scan_active))

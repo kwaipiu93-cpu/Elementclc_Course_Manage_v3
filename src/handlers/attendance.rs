@@ -1,4 +1,4 @@
-use axum::{extract::{Path, State}, http::HeaderMap, Json};
+use axum::{extract::{Path, State}, http::{HeaderMap, StatusCode}, response::IntoResponse, Json};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -1621,6 +1621,149 @@ pub async fn qr_checkin(
     }
 
     Ok(Json(json!({"ok": true, "data": {"studentId": stu_id, "name": student_name, "status": "present", "already": false}})))
+}
+
+// ─── Hardware Scanner: form-encoded body, plain text response ──────────
+
+/// Scanner sends:
+///   Content-Type: text/html; charset=UTF-8
+///   Body: vgdecoderesult=student@email.com&&devicenumber=SCANNER01&&otherparams=
+/// Response: code=0000 (success) or code=0001~0008 (error + voice prompt)
+pub async fn scanner_checkin(
+    State(state): State<AppState>,
+    body: String,
+) -> impl IntoResponse {
+    let mut email = String::new();
+    let mut _device = String::new();
+
+    for part in body.split("&&") {
+        if let Some((k, v)) = part.split_once('=') {
+            match k.trim() {
+                "vgdecoderesult" => email = v.trim().to_string(),
+                "devicenumber" => _device = v.trim().to_string(),
+                _ => {}
+            }
+        }
+    }
+
+    if email.is_empty() {
+        return (StatusCode::OK, "code=0005");
+    }
+
+    // lesson_id from active scan session
+    let lesson_id: i64 = match sqlx::query_scalar(
+        "SELECT lesson_id FROM scan_sessions WHERE active = 1 ORDER BY started_at DESC LIMIT 1"
+    )
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(Some(lid)) => lid,
+        _ => return (StatusCode::OK, "code=0002"),
+    };
+
+    // Find student
+    let (stu_id, _, _) = match sqlx::query_as::<_, (i64, String, String)>(
+        "SELECT id, surname, given_name FROM students WHERE email = ? AND is_deleted = 0"
+    )
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(Some(s)) => s,
+        _ => return (StatusCode::OK, "code=0001"),
+    };
+
+    // Already checked in?
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM lesson_checkins WHERE lesson_id = ? AND student_id = ?"
+    )
+    .bind(lesson_id)
+    .bind(stu_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(ref status) = existing {
+        let already = matches!(
+            status.as_str(),
+            "present" | "makeup" | "recording_room_present" | "video_makeup"
+        );
+        if already || !status.is_empty() {
+            return (StatusCode::OK, "code=0004");
+        }
+    }
+
+    // Enrolled?
+    let enrollment: Option<(i64,)> = sqlx::query_as(
+        r#"SELECT e.id FROM enrollments e
+           JOIN lessons l ON l.id = ? AND l.is_deleted = 0
+           WHERE e.student_id = ? AND e.class_id = l.class_id AND e.is_deleted = 0"#
+    )
+    .bind(lesson_id)
+    .bind(stu_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some((eid,)) = enrollment {
+        let result = sqlx::query(
+            r#"INSERT INTO lesson_checkins (lesson_id, student_id, enrollment_id, status, checkin_time, source)
+               VALUES (?, ?, ?, 'present', datetime('now'), 'scanner')
+               ON CONFLICT(lesson_id, student_id) DO UPDATE SET status = 'present', checkin_time = datetime('now')"#
+        )
+        .bind(lesson_id)
+        .bind(stu_id)
+        .bind(eid)
+        .execute(&state.db)
+        .await;
+
+        return match result {
+            Ok(_) => (StatusCode::OK, "code=0000"),
+            Err(_) => (StatusCode::OK, "code=0005"),
+        };
+    }
+
+    // Makeup?
+    let makeup: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM makeup_lessons
+         WHERE student_id = ? AND target_lesson_id = ? AND status = 'scheduled' AND is_deleted = 0
+         LIMIT 1"
+    )
+    .bind(stu_id)
+    .bind(lesson_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some((mk_id,)) = makeup {
+        if sqlx::query(
+            r#"INSERT INTO lesson_checkins (lesson_id, student_id, status, checkin_time, source)
+               VALUES (?, ?, 'makeup', datetime('now'), 'scanner')
+               ON CONFLICT(lesson_id, student_id) DO UPDATE SET status = 'makeup', checkin_time = datetime('now')"#
+        )
+        .bind(lesson_id)
+        .bind(stu_id)
+        .execute(&state.db)
+        .await
+        .is_err()
+        {
+            return (StatusCode::OK, "code=0005");
+        }
+
+        let _ = sqlx::query(
+            "UPDATE makeup_lessons SET status = 'done', updated_at = datetime('now') WHERE id = ?"
+        )
+        .bind(mk_id)
+        .execute(&state.db)
+        .await;
+
+        return (StatusCode::OK, "code=0000");
+    }
+
+    (StatusCode::OK, "code=0003")
 }
 
 // ─── Scan Session Management (auth required) ────────────────────────────
