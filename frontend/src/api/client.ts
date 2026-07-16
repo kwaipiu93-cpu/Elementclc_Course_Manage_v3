@@ -22,6 +22,17 @@ async function request<T>(
     headers,
   });
 
+  // Token expired → clear auth and redirect to login
+  if (res.status === 401) {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    // Only redirect if not already on login page
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login';
+    }
+    throw new Error('登入已過期，請重新登入');
+  }
+
   const data = await res.json();
 
   if (!data.ok) {
