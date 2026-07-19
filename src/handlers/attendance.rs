@@ -1989,6 +1989,7 @@ pub async fn daily_checkin(
         class_type: String,
     }
 
+    // Always include persistent 補課錄播班 (class 8, date='0000-00-00') regardless of selected date
     let lessons = sqlx::query_as::<_, LessonWithClass>(
         r#"SELECT l.id as lesson_id, l.class_id, l.num, l.date, c.name as class_name,
                   COALESCE(c.week,'') as week, COALESCE(c.start,'') || '-' || COALESCE(c.end,'') as time,
@@ -1996,41 +1997,9 @@ pub async fn daily_checkin(
            FROM lessons l
            JOIN classes c ON l.class_id = c.id
            LEFT JOIN topics t ON c.topic_id = t.id
-           WHERE l.date = ? AND l.is_deleted = 0 AND c.is_deleted = 0
-           ORDER BY c.name, l.num"#
-    )
-    .bind(&q.date)
-    .fetch_all(&state.db)
-    .await?;
-
-    // Auto-create a lesson for 補課錄播班 if none exists for this date
-    let has_recording_lesson = lessons.iter().any(|l| l.class_id == 8);
-    if !has_recording_lesson {
-        let max_num: Option<i32> = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(num), 0) FROM lessons WHERE class_id = 8 AND is_deleted = 0"
-        )
-        .fetch_one(&state.db)
-        .await?;
-        let next_num = max_num.unwrap_or(0) + 1;
-        sqlx::query(
-            "INSERT INTO lessons (class_id, num, date, start, end, status, is_deleted, updated_at, updated_by) VALUES (8, ?, ?, '09:00', '18:00', '正常', 0, datetime('now'), 1)"
-        )
-        .bind(next_num)
-        .bind(&q.date)
-        .execute(&state.db)
-        .await?;
-    }
-
-    // Re-fetch lessons to include auto-created recording lesson
-    let lessons = sqlx::query_as::<_, LessonWithClass>(
-        r#"SELECT l.id as lesson_id, l.class_id, l.num, l.date, c.name as class_name,
-                  COALESCE(c.week,'') as week, COALESCE(c.start,'') || '-' || COALESCE(c.end,'') as time,
-                  c.seat as class_seat, COALESCE(t.type,'') as class_type
-           FROM lessons l
-           JOIN classes c ON l.class_id = c.id
-           LEFT JOIN topics t ON c.topic_id = t.id
-           WHERE l.date = ? AND l.is_deleted = 0 AND c.is_deleted = 0
-           ORDER BY c.name, l.num"#
+           WHERE (l.date = ? OR (l.class_id = 8 AND l.date = '0000-00-00'))
+             AND l.is_deleted = 0 AND c.is_deleted = 0
+           ORDER BY CASE WHEN l.class_id = 8 THEN 0 ELSE 1 END, c.name, l.num"#
     )
     .bind(&q.date)
     .fetch_all(&state.db)

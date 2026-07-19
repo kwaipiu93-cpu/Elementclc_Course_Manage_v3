@@ -52,6 +52,14 @@ const STATUS_OPTIONS = [
   { key: '', label: '🔄 未處理', color: 'bg-gray-100 text-gray-600 hover:bg-gray-200' },
 ];
 
+// Status options for 補課錄播班 (Class 8) — recording checkin only
+const RECORDING_STATUS_OPTIONS = [
+  { key: 'recording_room_present', label: '📹 課室錄播出席', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' },
+  { key: 'video_makeup', label: '🎥 線上錄播出席', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200' },
+  { key: 'leave', label: '📋 請假', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200' },
+  { key: '', label: '🔄 未處理', color: 'bg-gray-100 text-gray-600 hover:bg-gray-200' },
+];
+
 const RECORDING_ACTIONS = [
   { type: '線上錄播', label: '🎥 安排線上錄播', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200' },
   { type: '課室錄播', label: '📹 安排課室錄播', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' },
@@ -113,6 +121,10 @@ export default function Attendance() {
     refetchInterval: scanningLessonId ? 3000 : false,
   });
 
+  // Separate 補課錄播班 (Class 8) from date-bound classes
+  const recordingGroup = (classGroups || []).find(g => g.classId === RECORDING_CLASS_ID);
+  const normalGroups = (classGroups || []).filter(g => g.classId !== RECORDING_CLASS_ID);
+
   // Calendar — fetch current month for month view
   const calYear = calWeekStart.getFullYear();
   const calMonth = calWeekStart.getMonth() + 1;
@@ -138,8 +150,9 @@ export default function Attendance() {
 
   const createRecordingMakeup = useMutation({
     mutationFn: (data: { lessonId: number; studentId: number; makeupType: string }) => {
-      // Find the lesson info to get class_id and lesson_num
-      for (const group of classGroups || []) {
+      // Find the lesson info to get class_id and lesson_num (search normal groups only)
+      const allGroups = normalGroups || [];
+      for (const group of allGroups) {
         for (const ls of group.lessons || []) {
           if (ls.lessonId === data.lessonId) {
             return api.createMakeup({
@@ -473,7 +486,132 @@ export default function Attendance() {
             <div className="bg-red-50 text-red-700 p-4 rounded-xl text-center">載入失敗，請重試</div>
           )}
 
-          {!isLoading && !isError && classGroups?.length === 0 && (
+          {/* ─── 🎥 錄播補課簽到（恆常 panel，不分日期） ─── */}
+          {!isLoading && !isError && recordingGroup && recordingGroup.lessons.map((lesson: Lesson) => {
+            const stats = statsForLesson(lesson);
+            return (
+              <div key={`recording-${lesson.lessonId}`} className="bg-white rounded-xl shadow-sm overflow-hidden mb-4 border-l-4 border-l-amber-400">
+                {/* Recording panel header */}
+                <div className="px-4 py-2.5 bg-gradient-to-r from-amber-50 to-white border-b border-gray-200 flex items-center justify-between">
+                  <div>
+                    <span className="font-bold text-gray-800">🎥 錄播補課簽到</span>
+                    <span className="text-xs text-amber-600 ml-3">不限日期 · 全部待補學生</span>
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    {stats.total} 人待簽到
+                  </div>
+                </div>
+
+                {/* Recording students table */}
+                <div className="overflow-x-auto">
+                  {lesson.students.length === 0 ? (
+                    <div className="p-6 text-center text-sm text-gray-400">
+                      🎉 暫無需錄播補課的學生
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-100 bg-gray-50/50 text-xs text-gray-500">
+                          <th className="text-left px-3 py-2 font-medium">學生</th>
+                          <th className="text-left px-3 py-2 font-medium">原班級</th>
+                          <th className="text-left px-3 py-2 font-medium">Topic</th>
+                          <th className="text-left px-3 py-2 font-medium">課節</th>
+                          <th className="text-left px-3 py-2 font-medium">缺席日</th>
+                          <th className="text-left px-3 py-2 font-medium">類型</th>
+                          <th className="text-left px-3 py-2 font-medium">簽到狀態</th>
+                          <th className="text-left px-3 py-2 font-medium">功課</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lesson.students.map((stu: Stu) => {
+                          const mk = (stu as any).makeup_source;
+                          return (
+                            <tr key={stu.studentId} className="border-t border-gray-50 hover:bg-gray-50">
+                            <td className="px-3 py-2">
+                              <span className="font-medium text-sm text-gray-800">
+                                {(() => {
+                                  const idx = stu.name.indexOf(' ');
+                                  if (idx > 0) {
+                                    const sur = stu.name.slice(0, idx);
+                                    const given = stu.name.slice(idx + 1);
+                                    return <><span className="inline-block bg-gray-100 text-gray-500 text-[10px] font-bold px-1.5 py-0.5 rounded mr-1 align-middle">{sur}</span><span className="align-middle">{given}</span></>;
+                                  }
+                                  return stu.name;
+                                })()}
+                              </span>
+                              {stu.school && <div className="text-[10px] text-gray-400">{stu.school}</div>}
+                            </td>
+                            <td className="px-3 py-2 text-xs text-gray-600">{mk?.original_class || '—'}</td>
+                            <td className="px-3 py-2 text-xs text-gray-600">{mk?.original_topic || '—'}</td>
+                            <td className="px-3 py-2 text-xs text-gray-600">第{mk?.lesson_num || '?'}課</td>
+                            <td className="px-3 py-2 text-xs text-gray-600">{mk?.absent_date || '—'}</td>
+                            <td className="px-3 py-2 text-xs">
+                              <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                                mk?.makeup_type === '線上錄播' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'
+                              }`}>
+                                {mk?.makeup_type === '線上錄播' ? '🎥線上' : '📹課室'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <button
+                                onClick={() => {
+                                  setActionTarget({
+                                    lessonId: lesson.lessonId,
+                                    studentId: stu.studentId,
+                                    studentName: stu.name,
+                                    studentSchool: stu.school ?? '',
+                                    className: '錄播補課',
+                                    lessonNum: lesson.lessonNum,
+                                    existingStatus: stu.status,
+                                  });
+                                }}
+                                disabled={isProcessing}
+                                className="text-left w-full disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {(() => {
+                                  const s = stu.status;
+                                  if (s === 'recording_room_present' || s === 'video_makeup') {
+                                    const badge: Record<string, { text: string; bg: string; fg: string }> = {
+                                      'recording_room_present': { text: '✅課室錄播出席', bg: 'bg-emerald-50', fg: 'text-emerald-700' },
+                                      'video_makeup': { text: '✅線上錄播出席', bg: 'bg-purple-50', fg: 'text-purple-700' },
+                                    };
+                                    const b = badge[s];
+                                    return <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${b.bg} ${b.fg}`}>{b.text}</span>;
+                                  }
+                                  return <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-amber-50 text-amber-700">⌛️待簽到</span>;
+                                })()}
+                              </button>
+                            </td>
+                            <td className="px-3 py-2 text-xs">
+                              <button
+                                onClick={() => toggleHw.mutate({
+                                  lessonId: lesson.lessonId,
+                                  studentId: stu.studentId,
+                                  done: !stu.homeworkDone,
+                                })}
+                                disabled={toggleHw.isPending}
+                                className={`inline-block px-2 py-1 rounded text-xs font-medium transition-colors ${
+                                  stu.homeworkDone
+                                    ? 'bg-green-50 text-green-700 hover:bg-green-100'
+                                    : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                                }`}
+                                title={stu.homeworkDone ? '已交功課 (click變未交)' : '未交功課 (click變已交)'}
+                              >
+                                {stu.homeworkDone ? '✅ 已交' : '❌ 未交'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+          {!isLoading && !isError && normalGroups.length === 0 && (
             <div className="bg-white rounded-xl shadow-sm p-8 text-center text-gray-400">
               <CalendarIcon size={48} className="mx-auto mb-3 opacity-30" />
               <p className="text-lg font-medium">{selectedDate}</p>
@@ -481,7 +619,7 @@ export default function Attendance() {
             </div>
           )}
 
-          {!isLoading && !isError && classGroups?.map((group: ClassGroup) => (
+          {!isLoading && !isError && normalGroups?.map((group: ClassGroup) => (
             <div key={group.classId} className="bg-white rounded-xl shadow-sm overflow-hidden mb-4">
               {/* Class header */}
               <div className={`px-4 py-2.5 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200 flex items-center justify-between ${group.classId === RECORDING_CLASS_ID ? 'border-l-4 border-l-amber-400' : ''}`}>
@@ -877,11 +1015,13 @@ export default function Attendance() {
               </button>
             </div>
 
-            {/* Status update */}
-            <div className="mb-3">
-              <p className="text-xs font-medium text-gray-600 mb-2">⚡ 更改狀態</p>
+            {/* Status update — different options for 錄播補課 vs normal classes */}
+            <div className={actionTarget.className === '錄播補課' ? '' : 'mb-3'}>
+              <p className="text-xs font-medium text-gray-600 mb-2">
+                {actionTarget.className === '錄播補課' ? '🎥 錄播簽到' : '⚡ 更改狀態'}
+              </p>
               <div className="grid grid-cols-2 gap-2">
-                {STATUS_OPTIONS.map(opt => (
+                {(actionTarget.className === '錄播補課' ? RECORDING_STATUS_OPTIONS : STATUS_OPTIONS).map(opt => (
                   <button
                     key={opt.key}
                     onClick={() => handleQuickStatus(opt.key)}
@@ -894,7 +1034,8 @@ export default function Attendance() {
               </div>
             </div>
 
-            {/* Recording makeup actions */}
+            {/* Recording makeup actions — only for normal classes, not 錄播補課 itself */}
+            {actionTarget.className !== '錄播補課' && (
             <div>
               <p className="text-xs font-medium text-gray-600 mb-2">🎥 安排錄播補課</p>
               <div className="grid grid-cols-2 gap-2">
@@ -921,6 +1062,7 @@ export default function Attendance() {
                 <span className="text-[10px] text-amber-500 ml-auto">購買記錄</span>
               </label>
             </div>
+            )}
 
             {isProcessing && (
               <div className="mt-3 text-center text-xs text-gray-400">

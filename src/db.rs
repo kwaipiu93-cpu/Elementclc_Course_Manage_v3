@@ -340,6 +340,18 @@ pub async fn run_migrations(pool: &SqlitePool) -> color_eyre::Result<()> {
     .execute(pool)
     .await?;
 
+    // Persistent lesson for 補課錄播班 (class 8) — date='0000-00-00' so it never matches date filters
+    sqlx::query(
+        "INSERT OR IGNORE INTO lessons (id, class_id, num, date, start, end, status, is_deleted, updated_at, updated_by)
+         VALUES (99999, 8, 0, '0000-00-00', '00:00', '23:59', '正常', 0, datetime('now'), 1)"
+    )
+    .execute(pool)
+    .await?;
+
+    // Migration: add makeup_id column to enrollments (links enrollment to makeup_lessons for recording class 8)
+    let _ = sqlx::query("ALTER TABLE enrollments ADD COLUMN makeup_id INTEGER")
+        .execute(pool).await;
+
     Ok(())
 
 }
