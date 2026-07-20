@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { Calendar as CalendarIcon, List, Loader2, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Calendar as CalendarIcon, Loader2, X, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import ScanPanel from '../components/ScanPanel';
-import LessonBoard from '../components/LessonBoard';
 import WeekTimeline from '../components/WeekTimeline';
+import DayTimeline from '../components/DayTimeline';
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ const RECORDING_ACTIONS = [
 export default function Attendance() {
   const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD（local timezone）
   const [selectedDate, setSelectedDate] = useState(today);
-  const [calMode, setCalMode] = useState<'list' | 'week' | 'month'>('list');
+  const [calMode, setCalMode] = useState<'day' | 'week' | 'month'>('day');
   const [calWeekStart, setCalWeekStart] = useState(() => {
     // Monday of current week
     const now = new Date();
@@ -103,21 +103,13 @@ export default function Attendance() {
 
   const [scanningLessonId, setScanningLessonId] = useState<number | null>(null);
 
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
-  const [editNoteValue, setEditNoteValue] = useState('');
-
-  const saveNote = (_lessonId: number, studentId: number, note: string) => {
-    setEditingNoteId(null);
-    updateNote.mutate({ studentId, note });
-  };
-
   const queryClient = useQueryClient();
 
   // Daily data — auto-refresh during scan
   const { data: classGroups, isLoading, isError } = useQuery({
     queryKey: ['attendance-daily', selectedDate],
     queryFn: () => api.getAttendanceDaily(selectedDate),
-    enabled: calMode === 'list',
+    enabled: calMode === 'day',
     refetchInterval: scanningLessonId ? 3000 : false,
   });
 
@@ -194,6 +186,7 @@ export default function Attendance() {
       queryClient.invalidateQueries({ queryKey: ['attendance-daily', selectedDate] });
     },
   });
+  void updateNote; // keep for future use
 
   const startScan = useMutation({
     mutationFn: (lessonId: number) => api.scanStart(lessonId),
@@ -300,12 +293,12 @@ export default function Attendance() {
   // Calendar
   const goToDate = (dateStr: string) => {
     setSelectedDate(dateStr);
-    setCalMode('list');
+    setCalMode('day');
   };
 
   const goToday = () => {
     setSelectedDate(today);
-    setCalMode('list');
+    setCalMode('day');
   };
 
   const calDays = () => {
@@ -361,14 +354,14 @@ export default function Attendance() {
           今日
         </button>
         <span className="text-sm text-gray-400 ml-1">
-          {classGroups && !isLoading ? `${classGroups.length} 班` : ''}
+          {normalGroups && !isLoading ? `${normalGroups.length} 班` : ''}
         </span>
         <div className="flex gap-1 ml-auto">
           <button
-            onClick={() => setCalMode('list')}
-            className={`px-3 py-1.5 text-sm rounded-lg ${calMode === 'list' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            onClick={() => setCalMode('day')}
+            className={`px-3 py-1.5 text-sm rounded-lg ${calMode === 'day' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
-            <List size={16} className="inline mr-1" />列表
+            <Clock size={16} className="inline mr-1" />日
           </button>
           <button
             onClick={() => setCalMode('week')}
@@ -474,7 +467,7 @@ export default function Attendance() {
 
       {/* ═══ List view — 全班分組展示 ═══ */}
 
-      {calMode === 'list' && (
+      {calMode === 'day' && (
         <div className="space-y-6">
           {isLoading && (
             <div className="flex items-center justify-center py-12">
@@ -619,353 +612,21 @@ export default function Attendance() {
             </div>
           )}
 
-          {!isLoading && !isError && normalGroups?.map((group: ClassGroup) => (
-            <div key={group.classId} className="bg-white rounded-xl shadow-sm overflow-hidden mb-4">
-              {/* Class header */}
-              <div className={`px-4 py-2.5 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200 flex items-center justify-between ${group.classId === RECORDING_CLASS_ID ? 'border-l-4 border-l-amber-400' : ''}`}>
-                <div>
-                  <span className="font-bold text-gray-800">{group.classId === RECORDING_CLASS_ID ? '🎥 錄播簽到' : group.className}</span>
-                  {group.classId !== RECORDING_CLASS_ID && (
-                    <span className="text-sm text-gray-500 ml-3">
-                      {group.week}{' '}
-                      {group.seat ? `(座位: ${group.seat})` : ''}
-                    </span>
-                  )}
-                </div>
-                {group.classId !== RECORDING_CLASS_ID && (
-                  <div className="text-xs text-gray-400">
-                    {group.lessons.length} 節課
-                  </div>
-                )}
-              </div>
-
-              {/* Lesson tables */}
-              {group.lessons.map((lesson: Lesson) => {
-                const stats = statsForLesson(lesson);
-                return (
-                  <div key={lesson.lessonId} className="border-b border-gray-100 last:border-b-0">
-                    {/* Lesson sub-header */}
-                    <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between text-sm">
-                      <span className="font-medium text-gray-700">
-                        第 {lesson.lessonNum} 節 {lesson.time ? `(${lesson.time})` : ''}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        {scanningLessonId === lesson.lessonId ? (
-                          <span className="flex items-center gap-1 text-xs">
-                            <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                            <span className="text-green-700 font-medium">掃碼中</span>
-                            <button
-                              onClick={() => {
-                                stopScan.mutate();
-                              }}
-                              disabled={stopScan.isPending}
-                              className="ml-1 px-2 py-0.5 rounded text-xs bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50"
-                            >
-                              🛑 停止
-                            </button>
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => {
-                              setScanningLessonId(lesson.lessonId);
-                              startScan.mutate(lesson.lessonId);
-                            }}
-                            disabled={startScan.isPending || !!scanningLessonId}
-                            className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 disabled:opacity-50"
-                          >
-                            📷 掃碼
-                          </button>
-                        )}
-                        {/* 看板按鈕 — 無論是否掃碼中都可獨立切換 */}
-                        <button
-                          onClick={() => toggleLessonBoard(lesson.lessonId)}
-                          className={`px-2 py-0.5 rounded text-xs transition-colors ${
-                            lessonBoardIds.has(lesson.lessonId)
-                              ? 'bg-amber-100 text-amber-700 font-medium'
-                              : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                          }`}
-                        >
-                          📋 看板
-                        </button>
-                        <span className="text-xs text-gray-400">
-                          ✅{stats.present} 📋{stats.leave} ❌{stats.absent} 🎥{stats.catchup} ⌛️{stats.pending} ‼️{stats.waiting} / {stats.total}人
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Scan info bar */}
-                    {scanningLessonId === lesson.lessonId && (
-                      <div className="px-4 py-1.5 bg-green-50 border-b border-green-100 text-xs text-green-700 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span>📡 Web掃碼 →</span>
-                          <code className="bg-green-100 px-2 py-0.5 rounded text-green-800 font-mono select-all">
-                            {window.location.origin}/api/qr-checkin
-                          </code>
-                          <span className="text-green-500">{"{email}"} (JSON)</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span>🔌 硬體掃描器 →</span>
-                          <code className="bg-green-100 px-2 py-0.5 rounded text-green-800 font-mono select-all">
-                            {window.location.origin}/api/scanner-checkin
-                          </code>
-                          <span className="text-green-500">vgdecoderesult=email (form)</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Student table OR per-lesson board view */}
-                    {lessonBoardIds.has(lesson.lessonId) ? (
-                      <LessonBoard
-                        lessonId={lesson.lessonId}
-                        students={lesson.students}
-                        onToggleHomework={(lid, sid, done) => toggleHw.mutate({ lessonId: lid, studentId: sid, done })}
-                      />
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm" style={{ minWidth: 500 }}>
-                          <thead>
-                            <tr className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
-                              <th className="text-left px-3 py-2 font-medium">學生</th>
-                              {group.classId === RECORDING_CLASS_ID && (
-                                <>
-                                  <th className="text-left px-3 py-2 font-medium">原班級</th>
-                                  <th className="text-left px-3 py-2 font-medium">Topic</th>
-                                  <th className="text-left px-3 py-2 font-medium">原課節</th>
-                                  <th className="text-left px-3 py-2 font-medium">缺席日</th>
-                                  <th className="text-left px-3 py-2 font-medium">類型</th>
-                                </>
-                              )}
-                              <th className="text-left px-3 py-2 font-medium">出席狀態</th>
-                              <th className="text-left px-3 py-2 font-medium">功課</th>
-                              <th className="text-left px-3 py-2 font-medium">來源</th>
-                              <th className="text-left px-3 py-2 font-medium">簽到時間</th>
-                              <th className="text-left px-3 py-2 font-medium">繳費</th>
-                              <th className="text-left px-3 py-2 font-medium">備註</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {lesson.students.map((stu: Stu) => {
-                              const mk = (stu as any).makeup_source;
-                              return (
-                                <tr
-                                  key={stu.studentId}
-                                  className={`border-t border-gray-50 ${stu.blocked ? 'bg-red-50' : stu.status === 'leave' ? 'bg-gray-100 opacity-60' : 'hover:bg-gray-50'}`}
-                              >
-                                <td className="px-3 py-2">
-                                  <div className="flex items-center gap-1.5">
-                                    <div>
-                                      <span className={`font-medium text-sm ${stu.blocked ? 'text-red-700' : 'text-gray-800'}`}>
-                                        {(() => {
-                                          const idx = stu.name.indexOf(' ');
-                                          if (idx > 0) {
-                                            const sur = stu.name.slice(0, idx);
-                                            const given = stu.name.slice(idx + 1);
-                                            return <><span className="inline-block bg-gray-100 text-gray-500 text-[10px] font-bold px-1.5 py-0.5 rounded mr-1 align-middle">{sur}</span><span className="align-middle">{given}</span></>;
-                                          }
-                                          return stu.name;
-                                        })()}
-                                      </span>
-                                      {stu.school && <div className="text-[10px] text-gray-400">{stu.school}</div>}
-                                    </div>
-                                    {stu.blocked && (
-                                      <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded" title="前一節缺席，需先補簽">
-                                        🔒
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                                {group.classId === RECORDING_CLASS_ID && (
-                                  <>
-                                    <td className="px-3 py-2 text-xs text-gray-600">{mk?.original_class || '—'}</td>
-                                    <td className="px-3 py-2 text-xs text-gray-600">{mk?.original_topic || '—'}</td>
-                                    <td className="px-3 py-2 text-xs text-gray-600">第{mk?.lesson_num || '?'}課</td>
-                                    <td className="px-3 py-2 text-xs text-gray-600">{mk?.absent_date || '—'}</td>
-                                    <td className="px-3 py-2 text-xs">
-                                      <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                                        mk?.makeup_type === '線上錄播' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'
-                                      }`}>
-                                        {mk?.makeup_type === '線上錄播' ? '🎥線上' : '📹課室'}
-                                      </span>
-                                    </td>
-                                  </>
-                                )}
-                                <td className="px-3 py-2">
-                                  {/* Clickable status badge */}
-                                  <button
-                                    onClick={() => {
-                                      if (stu.blocked || stu.locked) return;
-                                      setActionTarget({
-                                        lessonId: lesson.lessonId,
-                                        studentId: stu.studentId,
-                                        studentName: stu.name,
-                                        studentSchool: stu.school ?? '',
-                                        className: group.className,
-                                        lessonNum: lesson.lessonNum,
-                                        existingStatus: stu.status,
-                                      });
-                                    }}
-                                    disabled={stu.blocked || stu.locked || isProcessing}
-                                    className="text-left w-full disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={stu.locked ? '後續課節已有記錄，無法修改此課' : stu.blocked ? '前一節缺席，需先補簽' : ''}
-                                  >
-                                    {(() => {
-                                      const s = stu.status;
-                                      if (stu.locked) {
-                                        // Locked: has a status but can't be modified due to later lessons
-                                        if (s === 'present' || s === 'makeup' || s === 'recording_room_present' || s === 'video_makeup' || s === 'leave' || s === 'absent' || s === 'waiting' || s === 'scheduled_room' || s === 'scheduled_video' || s === 'scheduled_classroom' || s === 'catchup_required') {
-                                        const badge: Record<string, { text: string; bg: string; fg: string }> = {
-                                            'present': { text: '✅課堂教學出席', bg: 'bg-green-50', fg: 'text-green-700' },
-                                            'leave': { text: '📋請假待安排', bg: 'bg-blue-50', fg: 'text-blue-700' },
-                                            'absent': { text: '❌缺勤待安排', bg: 'bg-red-50', fg: 'text-red-700' },
-                                            'recording_room_present': { text: '✅課室錄播出席', bg: 'bg-emerald-50', fg: 'text-emerald-700' },
-                                            'video_makeup': { text: '✅線上錄播出席', bg: 'bg-purple-50', fg: 'text-purple-700' },
-                                            'makeup': { text: '✅課堂補堂出席', bg: 'bg-green-50', fg: 'text-green-700' },
-                                            'waiting': { text: '‼️課堂教學候補', bg: 'bg-red-50 border border-red-300', fg: 'text-red-700 font-bold' },
-                                            'scheduled_room': { text: '⌛️課室錄播待補', bg: 'bg-amber-50', fg: 'text-amber-700' },
-                                            'scheduled_video': { text: '⌛️線上錄播待補', bg: 'bg-purple-50', fg: 'text-purple-700' },
-                                            'scheduled_classroom': { text: '⌛️課堂教學待補', bg: 'bg-amber-50', fg: 'text-amber-700' },
-                                            'catchup_required': { text: '🎥需錄播補堂', bg: 'bg-indigo-50', fg: 'text-indigo-700' },
-                                        };
-                                          const b = badge[s];
-                                          return (
-                                            <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${b.bg} ${b.fg} cursor-not-allowed`}>
-                                              🔒 {b.text}
-                                            </span>
-                                          );
-                                        }
-                                        return <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-400 cursor-not-allowed">🔒未處理</span>;
-                                      }
-                                      if (s === 'present' || s === 'makeup' || s === 'recording_room_present' || s === 'video_makeup' || s === 'leave' || s === 'absent' || s === 'waiting' || s === 'scheduled_room' || s === 'scheduled_video' || s === 'scheduled_classroom' || s === 'catchup_required') {
-                                      const badge: Record<string, { text: string; bg: string; fg: string }> = {
-                                          'present': { text: '✅課堂教學出席', bg: 'bg-green-50', fg: 'text-green-700' },
-                                          'leave': { text: '📋請假待安排', bg: 'bg-blue-50', fg: 'text-blue-700' },
-                                          'absent': { text: '❌缺勤待安排', bg: 'bg-red-50', fg: 'text-red-700' },
-                                          'recording_room_present': { text: '✅課室錄播出席', bg: 'bg-emerald-50', fg: 'text-emerald-700' },
-                                          'video_makeup': { text: '✅線上錄播出席', bg: 'bg-purple-50', fg: 'text-purple-700' },
-                                          'makeup': { text: '✅課堂補堂出席', bg: 'bg-green-50', fg: 'text-green-700' },
-                                          'waiting': { text: '‼️課堂教學候補', bg: 'bg-red-50 border border-red-300', fg: 'text-red-700 font-bold' },
-                                          'scheduled_room': { text: '⌛️課室錄播待補', bg: 'bg-amber-50', fg: 'text-amber-700' },
-                                          'scheduled_video': { text: '⌛️線上錄播待補', bg: 'bg-purple-50', fg: 'text-purple-700' },
-                                          'scheduled_classroom': { text: '⌛️課堂教學待補', bg: 'bg-amber-50', fg: 'text-amber-700' },
-                                          'catchup_required': { text: '🎥需錄播補堂', bg: 'bg-indigo-50', fg: 'text-indigo-700' },
-                                      };
-                                        const b = badge[s];
-                                        return (
-                                          <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${b.bg} ${b.fg}`}>
-                                            {b.text}
-                                          </span>
-                                        );
-                                      }
-                                      if (mk) {
-                                        const isRecording = mk.makeup_type === '線上錄播' || mk.makeup_type === '課室錄播';
-                                        if (mk.status === 'waiting') {
-                                          return <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-red-50 border border-red-300 text-red-700 font-bold">‼️課堂教學候補</span>;
-                                        }
-                                        if (isRecording) {
-                                          return <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-purple-50 text-purple-700">⌛️錄播待簽到</span>;
-                                        }
-                                        return <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-amber-50 text-amber-700">⌛️課堂教學待補</span>;
-                                      }
-                                      if (stu.blocked) {
-                                        return <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-400">🔒未完成</span>;
-                                      }
-                                      return <span className="inline-block px-2 py-1 rounded text-xs font-medium border border-dashed border-yellow-300 text-yellow-600">🟡未處理</span>;
-                                    })()}
-                                  </button>
-                                </td>
-                                <td className="px-3 py-2 text-xs">
-                                  {stu.locked || stu.blocked ? (
-                                    <span className="inline-block px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-300">—</span>
-                                  ) : (
-                                    <button
-                                      onClick={() => toggleHw.mutate({
-                                        lessonId: lesson.lessonId,
-                                        studentId: stu.studentId,
-                                        done: !stu.homeworkDone,
-                                      })}
-                                      disabled={toggleHw.isPending}
-                                      className={`inline-block px-2 py-1 rounded text-xs font-medium transition-colors ${
-                                        stu.homeworkDone
-                                          ? 'bg-green-50 text-green-700 hover:bg-green-100'
-                                          : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
-                                      }`}
-                                      title={stu.homeworkDone ? '已交功課 (click變未交)' : '未交功課 (click變已交)'}
-                                    >
-                                      {stu.homeworkDone ? '✅ 已交' : '❌ 未交'}
-                                    </button>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-xs text-gray-400">
-                                  {stu.source || '—'}
-                                </td>
-                                <td className="px-3 py-2 text-xs text-gray-400">
-                                  {stu.checkinTime || '—'}
-                                </td>
-                                {/* 繳費 */}
-                                <td className="px-3 py-2 text-xs">
-                                  <span className={`font-semibold ${
-                                    stu.payStatus === '已繳' ? 'text-green-700' : 'text-red-500'
-                                  }`}>
-                                    {stu.payStatus || '未繳'}
-                                  </span>
-                                </td>
-                                {/* 備註 — inline editable */}
-                                <td className="px-3 py-2 text-xs">
-                                  {editingNoteId === `${lesson.lessonId}-${stu.studentId}` ? (
-                                    <input
-                                      autoFocus
-                                      value={editNoteValue}
-                                      onChange={e => setEditNoteValue(e.target.value)}
-                                      onBlur={() => {
-                                        saveNote(lesson.lessonId, stu.studentId, editNoteValue);
-                                      }}
-                                      onKeyDown={e => {
-                                        if (e.key === 'Enter') {
-                                          saveNote(lesson.lessonId, stu.studentId, editNoteValue);
-                                        }
-                                        if (e.key === 'Escape') {
-                                          setEditingNoteId(null);
-                                        }
-                                      }}
-                                      className="w-full px-1.5 py-0.5 border border-blue-300 rounded text-xs outline-none focus:ring-1 focus:ring-blue-400"
-                                      placeholder="輸入備註..."
-                                    />
-                                  ) : (
-                                    <span
-                                      onClick={() => {
-                                        setEditingNoteId(`${lesson.lessonId}-${stu.studentId}`);
-                                        setEditNoteValue(stu.note || '');
-                                      }}
-                                      className={`block cursor-text transition-colors ${
-                                        stu.note?.trim()
-                                          ? 'text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200'
-                                          : 'text-gray-300 hover:text-gray-500'
-                                      }`}
-                                      title="click to edit"
-                                    >
-                                      {stu.note?.trim() ? `📝 ${stu.note}` : '—'}
-                                    </span>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-
-                      {/* No enrolled students */}
-                      {lesson.students.length === 0 && (
-                        <div className="p-4 text-center text-sm text-gray-400">
-                          未有學生報讀此課節
-                        </div>
-                      )}
-                    </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          {/* ═══ Day Timeline ═══ */}
+          {!isLoading && !isError && normalGroups.length > 0 && (
+            <DayTimeline
+              lessons={normalGroups.flatMap(g => g.lessons.map((l: any) => ({ ...l, className: g.className, classId: g.classId })))}
+              statsForLesson={statsForLesson}
+              scanningLessonId={scanningLessonId}
+              startScan={startScan}
+              stopScan={stopScan}
+              toggleHw={toggleHw}
+              onStudentClick={(data) => setActionTarget(data)}
+              isProcessing={isProcessing || updateStatus.isPending || toggleHw.isPending}
+              onToggleExpand={(id) => toggleLessonBoard(id)}
+              expandedIds={lessonBoardIds}
+            />
+          )}
         </div>
       )}
 
