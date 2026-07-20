@@ -75,7 +75,7 @@ export default function DayTimeline({
   const maxCols = Math.min(columns.length, 2);
 
   return (
-    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+    <div className="bg-white rounded-xl shadow-sm">
       <div className="relative" style={{ paddingLeft: '3.5rem', minHeight: `${totalH * PX_PER_HOUR + 20}px` }}>
         {/* Time axis + gridlines */}
         <div className="absolute left-0 top-0 bottom-0 w-14 border-r border-gray-200 bg-gray-50/50" style={{ zIndex: 1 }}>
@@ -161,7 +161,7 @@ export default function DayTimeline({
 
                 {/* Expanded content: LessonBoard or simple table */}
                 {isExpanded && (
-                  <div className="mt-1 border border-gray-200 rounded-lg overflow-hidden bg-white">
+                  <div className="mt-1 border border-gray-200 rounded-lg bg-white overflow-visible">
                     {renderExpanded ? renderExpanded(l) : (
                       <>
                         <table className="w-full text-sm">
