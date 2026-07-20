@@ -110,8 +110,8 @@ export default function Attendance() {
   const { data: classGroups, isLoading, isError } = useQuery({
     queryKey: ['attendance-daily', selectedDate],
     queryFn: () => api.getAttendanceDaily(selectedDate),
-    enabled: calMode === 'day',
-    refetchInterval: scanningLessonId ? 3000 : false,
+    enabled: calMode === 'day' || !!scanningLessonId,
+    refetchInterval: scanningLessonId ? 2000 : false,
   });
 
   // Separate 補課錄播班 (Class 8) from date-bound classes
