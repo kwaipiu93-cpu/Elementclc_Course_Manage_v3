@@ -5,6 +5,7 @@ import { Calendar as CalendarIcon, Loader2, X, ChevronLeft, ChevronRight, Clock 
 import ScanPanel from '../components/ScanPanel';
 import WeekTimeline from '../components/WeekTimeline';
 import DayTimeline from '../components/DayTimeline';
+import LessonBoard from '../components/LessonBoard';
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -490,10 +491,43 @@ export default function Attendance() {
                     <span className="font-bold text-gray-800">🎥 錄播補課簽到</span>
                     <span className="text-xs text-amber-600 ml-3">不限日期 · 全部待補學生</span>
                   </div>
-                  <div className="text-xs text-gray-400">
-                    {stats.total} 人待簽到
+                  <div className="flex items-center gap-2">
+                    <div className="text-xs text-gray-400">
+                      {stats.total} 人待簽到
+                    </div>
+                    {scanningLessonId === lesson.lessonId ? (
+                      <span className="flex items-center gap-1 text-xs">
+                        <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                        <span className="text-green-700 font-medium">掃碼中</span>
+                        <button onClick={() => stopScan.mutate()} disabled={stopScan.isPending}
+                          className="ml-1 px-2 py-0.5 rounded text-xs bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50">
+                          🛑 停止
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => { setScanningLessonId(lesson.lessonId); startScan.mutate(lesson.lessonId); }}
+                        disabled={startScan.isPending || !!scanningLessonId}
+                        className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 disabled:opacity-50"
+                      >
+                        📷 掃碼
+                      </button>
+                    )}
                   </div>
                 </div>
+
+                {/* Scan info bar */}
+                {scanningLessonId === lesson.lessonId && (
+                  <div className="px-4 py-1.5 bg-green-50 border-b border-green-100 text-xs text-green-700 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span>📡 Web掃碼 →</span>
+                      <code className="bg-green-100 px-2 py-0.5 rounded text-green-800 font-mono select-all">
+                        {window.location.origin}/api/qr-checkin
+                      </code>
+                      <span className="text-green-500">{"{email}"} (JSON)</span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Recording students table */}
                 <div className="overflow-x-auto">
@@ -625,6 +659,13 @@ export default function Attendance() {
               isProcessing={isProcessing || updateStatus.isPending || toggleHw.isPending}
               onToggleExpand={(id) => toggleLessonBoard(id)}
               expandedIds={lessonBoardIds}
+              renderExpanded={(l: any) => (
+                <LessonBoard
+                  lessonId={l.lessonId}
+                  students={l.students}
+                  onToggleHomework={(_lid: number, sid: number, done: boolean) => toggleHw.mutate({ lessonId: _lid, studentId: sid, done })}
+                />
+              )}
             />
           )}
         </div>

@@ -22,6 +22,7 @@ interface Props {
   isProcessing: boolean;
   onToggleExpand: (lessonId: number) => void;
   expandedIds: Set<number>;
+  renderExpanded?: (lesson: any) => React.ReactNode;
 }
 
 const PX_PER_HOUR = 80;
@@ -38,6 +39,7 @@ function parseTime(t: string): { start: number; end: number } | null {
 export default function DayTimeline({
   lessons, statsForLesson, scanningLessonId, startScan, stopScan,
   toggleHw, onStudentClick, isProcessing, onToggleExpand, expandedIds,
+  renderExpanded,
 }: Props) {
   const parsed: any[] = lessons
     .map(l => {
@@ -157,68 +159,72 @@ export default function DayTimeline({
                   </div>
                 </div>
 
-                {/* Expanded student table */}
+                {/* Expanded content: LessonBoard or simple table */}
                 {isExpanded && (
                   <div className="mt-1 border border-gray-200 rounded-lg overflow-hidden bg-white">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-gray-100 bg-gray-50/50 text-xs text-gray-500">
-                          <th className="text-left px-2 py-1.5 font-medium">學生</th>
-                          <th className="text-left px-2 py-1.5 font-medium">狀態</th>
-                          <th className="text-left px-2 py-1.5 font-medium">功課</th>
-                          <th className="text-left px-2 py-1.5 font-medium">時間</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {l.students.map((stu: any) => (
-                          <tr key={stu.studentId} className={`border-t border-gray-50 ${stu.blocked ? 'bg-red-50' : ''}`}>
-                            <td className="px-2 py-1.5">
-                              <button
-                                onClick={() => {
-                                  if (stu.blocked || stu.locked) return;
-                                  onStudentClick({
-                                    lessonId: l.lessonId, studentId: stu.studentId,
-                                    studentName: stu.name, studentSchool: stu.school || '',
-                                    className: l.className, lessonNum: l.lessonNum,
-                                    existingStatus: stu.status,
-                                  });
-                                }}
-                                disabled={stu.blocked || stu.locked || isProcessing}
-                                className="text-left disabled:opacity-50"
-                              >
-                                <span className="font-medium text-xs">{stu.name.split(' ')[1] || stu.name}</span>
-                                <span className="text-[10px] text-gray-400 ml-1">{stu.school}</span>
-                              </button>
-                            </td>
-                            <td className="px-2 py-1.5">
-                              {(() => {
-                                const s = stu.status;
-                                const badge: Record<string, string> = {
-                                  'present': '✅', 'leave': '📋', 'absent': '❌',
-                                  'recording_room_present': '📹✅', 'video_makeup': '🎥✅',
-                                  'makeup': '🔄✅', 'waiting': '‼️',
-                                  'scheduled_room': '⌛📹', 'scheduled_video': '⌛🎥',
-                                  'scheduled_classroom': '⌛🔄', 'catchup_required': '🎥',
-                                };
-                                return <span className="text-xs">{badge[s] || '🟡'}</span>;
-                              })()}
-                            </td>
-                            <td className="px-2 py-1.5 text-xs">
-                              <button
-                                onClick={() => toggleHw.mutate({ lessonId: l.lessonId, studentId: stu.studentId, done: !stu.homeworkDone })}
-                                disabled={toggleHw.isPending}
-                                className={`px-1.5 py-0.5 rounded text-[10px] ${stu.homeworkDone ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}
-                              >
-                                {stu.homeworkDone ? '✅' : '❌'}
-                              </button>
-                            </td>
-                            <td className="px-2 py-1.5 text-[10px] text-gray-400">{stu.checkinTime?.slice(11, 16) || '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {l.students.length === 0 && (
-                      <div className="p-3 text-center text-xs text-gray-400">未有學生</div>
+                    {renderExpanded ? renderExpanded(l) : (
+                      <>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-gray-100 bg-gray-50/50 text-xs text-gray-500">
+                              <th className="text-left px-2 py-1.5 font-medium">學生</th>
+                              <th className="text-left px-2 py-1.5 font-medium">狀態</th>
+                              <th className="text-left px-2 py-1.5 font-medium">功課</th>
+                              <th className="text-left px-2 py-1.5 font-medium">時間</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {l.students.map((stu: any) => (
+                              <tr key={stu.studentId} className={`border-t border-gray-50 ${stu.blocked ? 'bg-red-50' : ''}`}>
+                                <td className="px-2 py-1.5">
+                                  <button
+                                    onClick={() => {
+                                      if (stu.blocked || stu.locked) return;
+                                      onStudentClick({
+                                        lessonId: l.lessonId, studentId: stu.studentId,
+                                        studentName: stu.name, studentSchool: stu.school || '',
+                                        className: l.className, lessonNum: l.lessonNum,
+                                        existingStatus: stu.status,
+                                      });
+                                    }}
+                                    disabled={stu.blocked || stu.locked || isProcessing}
+                                    className="text-left disabled:opacity-50"
+                                  >
+                                    <span className="font-medium text-xs">{stu.name.split(' ')[1] || stu.name}</span>
+                                    <span className="text-[10px] text-gray-400 ml-1">{stu.school}</span>
+                                  </button>
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  {(() => {
+                                    const s = stu.status;
+                                    const badge: Record<string, string> = {
+                                      'present': '✅', 'leave': '📋', 'absent': '❌',
+                                      'recording_room_present': '📹✅', 'video_makeup': '🎥✅',
+                                      'makeup': '🔄✅', 'waiting': '‼️',
+                                      'scheduled_room': '⌛📹', 'scheduled_video': '⌛🎥',
+                                      'scheduled_classroom': '⌛🔄', 'catchup_required': '🎥',
+                                    };
+                                    return <span className="text-xs">{badge[s] || '🟡'}</span>;
+                                  })()}
+                                </td>
+                                <td className="px-2 py-1.5 text-xs">
+                                  <button
+                                    onClick={() => toggleHw.mutate({ lessonId: l.lessonId, studentId: stu.studentId, done: !stu.homeworkDone })}
+                                    disabled={toggleHw.isPending}
+                                    className={`px-1.5 py-0.5 rounded text-[10px] ${stu.homeworkDone ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}
+                                  >
+                                    {stu.homeworkDone ? '✅' : '❌'}
+                                  </button>
+                                </td>
+                                <td className="px-2 py-1.5 text-[10px] text-gray-400">{stu.checkinTime?.slice(11, 16) || '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {l.students.length === 0 && (
+                          <div className="p-3 text-center text-xs text-gray-400">未有學生</div>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
